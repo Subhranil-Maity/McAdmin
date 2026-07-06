@@ -42,7 +42,8 @@ Rust/Axum service for managing a Minecraft server worker process.
 - Status values are `OFFLINE`, `STARTING`, and `ONLINE`.
 - Starting the server spawns `java -jar <jar> nogui` with `-Xms` and `-Xmx` based on `SERVER_RAM`.
 - Stopping the server kills the stored child process handle and clears runtime state.
-- Recent logs are currently returned as an empty vector.
+- Recent logs are captured from the Minecraft process stdout/stderr into a 15,000-line circular buffer.
+- `GET /api/status` returns the most recent 250 captured log lines in chronological order.
 - Player counts are currently stubbed at `active_players = 0` and `max_players = 10`.
 
 ## Dependencies
@@ -52,6 +53,7 @@ Rust/Axum service for managing a Minecraft server worker process.
 - `serde`
 - `serde_json`
 - `dotenvy`
+- `circular-queue`
 - `sysinfo`
 - `tower-http` with `cors`
 

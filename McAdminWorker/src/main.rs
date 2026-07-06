@@ -6,15 +6,18 @@ use axum::{
     http::{HeaderValue, Method, StatusCode, request::Parts},
     routing::{get, post},
 };
+use circular_queue::CircularQueue;
 use config::{ConfigEntry, ConfigManager};
 use serde::Serialize;
 use std::env;
 use std::io;
 use std::path::{Path as FsPath, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::process::Stdio;
+use std::sync::{Arc, Mutex as StdMutex};
 use sysinfo::System;
-use tokio::sync::Mutex;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::Mutex as TokioMutex;
 use tokio::time::{Duration, sleep};
 use tower_http::{
     cors::{AllowOrigin, Any, CorsLayer},
@@ -22,12 +25,40 @@ use tower_http::{
 };
 use tracing::{Level, error, info};
 
+const LOG_BUFFER_CAPACITY: usize = 15_000;
+const RECENT_LOG_LINES: usize = 250;
+
 #[derive(Clone)]
 struct AppState {
-    system: Arc<Mutex<System>>,
+    system: Arc<TokioMutex<System>>,
     config: Arc<ConfigManager>,
-    minecraft: Arc<Mutex<MinecraftServerRuntime>>,
+    minecraft: Arc<TokioMutex<MinecraftServerRuntime>>,
+    logs: LogBuffer,
     server_dir: Arc<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LogBuffer {
+    lines: Arc<StdMutex<CircularQueue<String>>>,
+}
+
+impl LogBuffer {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            lines: Arc::new(StdMutex::new(CircularQueue::with_capacity(capacity))),
+        }
+    }
+
+    pub fn get_last_n(&self, n: usize) -> Vec<String> {
+        let lock = self.lines.lock().unwrap();
+        let mut result = lock.iter().take(n).cloned().collect::<Vec<_>>();
+        result.reverse();
+        result
+    }
+
+    pub fn push(&self, line: String) {
+        self.lines.lock().unwrap().push(line);
+    }
 }
 
 #[derive(Serialize)]
@@ -101,17 +132,18 @@ async fn main() {
     let config_path = server_dir.join("admin_worker_config.json");
 
     let state = AppState {
-        system: Arc::new(Mutex::new(System::new_all())),
+        system: Arc::new(TokioMutex::new(System::new_all())),
         config: Arc::new(
             ConfigManager::load(config_path)
                 .await
                 .expect("failed to load config manager"),
         ),
-        minecraft: Arc::new(Mutex::new(MinecraftServerRuntime {
+        minecraft: Arc::new(TokioMutex::new(MinecraftServerRuntime {
             state: MinecraftServerState::Offline,
             process_id: None,
             child: None,
         })),
+        logs: LogBuffer::new(LOG_BUFFER_CAPACITY),
         server_dir,
     };
 
@@ -190,7 +222,7 @@ async fn server_status(State(state): State<AppState>) -> Json<ServerStatusRespon
         uptime_seconds: System::uptime(),
         active_players: 0,
         max_players: 10,
-        recent_logs: Vec::new(),
+        recent_logs: state.logs.get_last_n(RECENT_LOG_LINES),
     })
 }
 
@@ -228,8 +260,14 @@ async fn start_server(
         minecraft.process_id = None;
         minecraft.child = None;
 
-        if let Err(error) =
-            start_minecraft_server(&jar_path, &state.server_dir, ram_gb, &mut minecraft)
+        if let Err(error) = start_minecraft_server(
+            &jar_path,
+            &state.server_dir,
+            ram_gb,
+            state.logs.clone(),
+            &mut minecraft,
+        )
+        .await
         {
             error!("Minecraft server failed: {error}");
             minecraft.state = MinecraftServerState::Offline;
@@ -250,7 +288,7 @@ async fn start_server(
     }))
 }
 
-async fn monitor_minecraft_server(minecraft: Arc<Mutex<MinecraftServerRuntime>>) {
+async fn monitor_minecraft_server(minecraft: Arc<TokioMutex<MinecraftServerRuntime>>) {
     loop {
         sleep(Duration::from_secs(1)).await;
 
@@ -329,8 +367,9 @@ async fn stop_server(
     if let Some(child) = child.as_mut() {
         child
             .kill()
+            .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let _ = child.wait();
+        let _ = child.wait().await;
     }
 
     Ok(Json(StopServerResponse {
@@ -339,10 +378,11 @@ async fn stop_server(
     }))
 }
 
-fn start_minecraft_server(
+async fn start_minecraft_server(
     jar_path: &FsPath,
     server_dir: &FsPath,
     ram_gb: u32,
+    log_buffer: LogBuffer,
     minecraft: &mut MinecraftServerRuntime,
 ) -> io::Result<()> {
     if !jar_path.exists() {
@@ -363,7 +403,7 @@ fn start_minecraft_server(
 
     info!("Starting Minecraft server inside: {}", server_dir.display());
 
-    let child = Command::new("java")
+    let mut child = Command::new("java")
         .current_dir(server_dir)
         .arg(&xms)
         .arg(&xmx)
@@ -372,19 +412,44 @@ fn start_minecraft_server(
         .arg("--nogui")
         .arg("--noconsole")
         .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()?;
     let process_id = child.id();
 
+    if let Some(stdout) = child.stdout.take() {
+        spawn_log_reader(stdout, log_buffer.clone(), None);
+    }
+
+    if let Some(stderr) = child.stderr.take() {
+        spawn_log_reader(stderr, log_buffer.clone(), Some("[ERROR] "));
+    }
+
     minecraft.state = MinecraftServerState::Online;
-    minecraft.process_id = Some(process_id);
+    minecraft.process_id = process_id;
     minecraft.child = Some(child);
 
     Ok(())
 }
 
-async fn reset_minecraft_runtime(minecraft: &Arc<Mutex<MinecraftServerRuntime>>) {
+fn spawn_log_reader<R>(stream: R, log_buffer: LogBuffer, prefix: Option<&'static str>)
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stream).lines();
+
+        while let Ok(Some(line)) = reader.next_line().await {
+            let line = match prefix {
+                Some(prefix) => format!("{prefix}{line}"),
+                None => line,
+            };
+            log_buffer.push(line);
+        }
+    });
+}
+
+async fn reset_minecraft_runtime(minecraft: &Arc<TokioMutex<MinecraftServerRuntime>>) {
     let mut runtime = minecraft.lock().await;
     runtime.state = MinecraftServerState::Offline;
     runtime.process_id = None;
