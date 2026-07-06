@@ -12,6 +12,8 @@ export interface ServerStatus {
   version: string;
   ipAddress: string;
   port: number;
+  activePlayers?: number;
+  maxPlayers?: number;
 }
 
 export interface ConsoleLog {
@@ -105,19 +107,79 @@ const mockLogs: ConsoleLog[] = [
 // Helper to simulate network latency
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/**
- * Retrieves the current status, including CPU and RAM usage.
- * RAM usage varies slightly to simulate realistic telemetry.
- */
-export async function getServerStatus(): Promise<ServerStatus> {
-  // TODO: Query active system process or docker container resources
+let lastFetchedStatus: ServerStatus | null = null;
+let lastFetchedLogs: ConsoleLog[] = [];
+
+// Helper to construct backend URL for API status
+function getBackendStatusUrl(): string {
+  let url = process.env.NEXT_PUBLIC_BACKEND_URL || "";
+  if (!url) return "";
+  if (!/^https?:\/\//i.test(url)) {
+    url = `http://${url}`;
+  }
+  url = url.replace(/\/+$/, "");
+  return `${url}/api/status`;
+}
+
+// Utility to format uptime seconds into readable string (e.g., 5h 56m 31s or 32m 12s)
+export function formatUptime(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) {
+    return `${h}h ${m}m ${s}s`;
+  }
+  return `${m}m ${s}s`;
+}
+
+// Helper to parse logs returned from backend to ConsoleLog format
+export function parseLogLine(line: string): ConsoleLog {
+  let timestamp = "";
+  let level: "INFO" | "WARN" | "ERROR" = "INFO";
+  let message = line;
+
+  // Extract timestamp like [22:59:57] or 22:59:57
+  const timeRegex = /\[?(\d{2}:\d{2}:\d{2})\]?/;
+  const timeMatch = line.match(timeRegex);
+  if (timeMatch) {
+    timestamp = timeMatch[1];
+  } else {
+    // Fallback: format current time as HH:MM:SS
+    timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
+  }
+
+  // Extract level
+  const upperLine = line.toUpperCase();
+  if (upperLine.includes("ERROR") || upperLine.includes("SEVERE") || upperLine.includes("FATAL") || upperLine.includes("CRITICAL")) {
+    level = "ERROR";
+  } else if (upperLine.includes("WARN") || upperLine.includes("WARNING")) {
+    level = "WARN";
+  } else {
+    level = "INFO";
+  }
+
+  // Clean message: remove prefix like "[22:59:57] [Server thread/INFO]: " or "[22:59:57 INFO]: "
+  const bracketColonIdx = line.indexOf("]: ");
+  if (bracketColonIdx !== -1) {
+    message = line.substring(bracketColonIdx + 3);
+  } else {
+    const colonIdx = line.indexOf(": ");
+    if (colonIdx !== -1 && colonIdx > 8) {
+      message = line.substring(colonIdx + 2);
+    }
+  }
+
+  return { timestamp, level, message };
+}
+
+// Get status of server from dummy generator
+async function getDummyServerStatus(): Promise<ServerStatus> {
   await delay(100);
 
   let cpu = 0;
   let ramUsed = 0;
 
   if (serverState === "ONLINE") {
-    // Generate minor variations
     const timeFactor = Date.now() / 2000;
     cpu = Math.floor(10 + Math.sin(timeFactor) * 5 + Math.random() * 8);
     ramUsed = parseFloat((4.2 + Math.cos(timeFactor / 2) * 0.15 + Math.random() * 0.05).toFixed(2));
@@ -137,16 +199,121 @@ export async function getServerStatus(): Promise<ServerStatus> {
     version: "Spigot 1.20.4",
     ipAddress: "127.0.0.1",
     port: 25565,
+    activePlayers: mockPlayers.filter(p => p.online).length,
+    maxPlayers: 20,
   };
+}
+
+/**
+ * Retrieves the current status, including CPU and RAM usage.
+ * Queries NEXT_PUBLIC_BACKEND_URL/api/status if configured, or falls back to mock data.
+ */
+export async function getServerStatus(): Promise<ServerStatus> {
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+  if (!backendUrl) {
+    return getDummyServerStatus();
+  }
+
+  const endpoint = getBackendStatusUrl();
+  try {
+    const res = await fetch(endpoint, { cache: "no-store" });
+    if (!res.ok) {
+      throw new Error(`HTTP error! status: ${res.status}`);
+    }
+    const data = await res.json();
+    
+    const statusState: ServerStatusState = 
+      data.status === "ONLINE" || data.status === "OFFLINE" || data.status === "STARTING"
+        ? data.status
+        : "ONLINE";
+
+    const cpu = typeof data.cpu_usage === "number" ? parseFloat(data.cpu_usage.toFixed(2)) : 0;
+    const ramMax = typeof data.ram_allocated_mb === "number" 
+      ? parseFloat((data.ram_allocated_mb / 1024).toFixed(2)) 
+      : 8.0;
+    const ramUsed = typeof data.ram_used_mb === "number" 
+      ? parseFloat((data.ram_used_mb / 1024).toFixed(2)) 
+      : 0;
+      
+    const uptime = typeof data.uptime_seconds === "number" ? data.uptime_seconds : 0;
+    const activePlayers = typeof data.active_players === "number" ? data.active_players : 0;
+    const maxPlayers = typeof data.max_players === "number" ? data.max_players : 10;
+
+    if (Array.isArray(data.recent_logs)) {
+      lastFetchedLogs = data.recent_logs.map((line: string) => parseLogLine(line));
+    }
+
+    const urlWithoutProto = backendUrl.replace(/^https?:\/\//i, "");
+    const [ip, portStr] = urlWithoutProto.split(":");
+    const ipAddress = ip || "127.0.0.1";
+    const port = portStr ? parseInt(portStr, 10) : 25565;
+
+    const serverStatus: ServerStatus = {
+      status: statusState,
+      cpu,
+      ramUsed,
+      ramMax,
+      uptime,
+      version: "Spigot 1.20.4",
+      ipAddress,
+      port,
+      activePlayers,
+      maxPlayers,
+    };
+    
+    lastFetchedStatus = serverStatus;
+    return serverStatus;
+  } catch (error) {
+    console.error("Error fetching server status from backend:", error);
+    
+    const urlWithoutProto = backendUrl.replace(/^https?:\/\//i, "");
+    const [ip, portStr] = urlWithoutProto.split(":");
+    const ipAddress = ip || "127.0.0.1";
+    const port = portStr ? parseInt(portStr, 10) : 25565;
+    
+    const offlineStatus: ServerStatus = {
+      status: "OFFLINE",
+      cpu: 0,
+      ramUsed: 0,
+      ramMax: 8.0,
+      uptime: 0,
+      version: "Unknown",
+      ipAddress,
+      port,
+      activePlayers: 0,
+      maxPlayers: 10,
+    };
+    lastFetchedStatus = offlineStatus;
+    return offlineStatus;
+  }
 }
 
 /**
  * Returns console logs.
  */
 export async function getConsoleLogs(): Promise<ConsoleLog[]> {
-  // TODO: Read tail of server.log file
-  await delay(100);
-  return [...mockLogs];
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+  if (!backendUrl) {
+    await delay(100);
+    return [...mockLogs];
+  }
+
+  if (lastFetchedLogs.length === 0) {
+    try {
+      const endpoint = getBackendStatusUrl();
+      const res = await fetch(endpoint, { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.recent_logs)) {
+          lastFetchedLogs = data.recent_logs.map((line: string) => parseLogLine(line));
+        }
+      }
+    } catch (e) {
+      console.error("Error loading console logs:", e);
+    }
+  }
+
+  return lastFetchedLogs;
 }
 
 /**
@@ -159,47 +326,87 @@ export async function sendConsoleCommand(command: string): Promise<string> {
   const [baseCmd, ...args] = cleanCmd.split(" ");
   const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
 
-  if (serverState !== "ONLINE") {
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+  const isOnline = backendUrl ? (lastFetchedStatus?.status === "ONLINE") : (serverState === "ONLINE");
+
+  if (!isOnline) {
     return "Error: Cannot execute command while server is offline.";
   }
 
-  mockLogs.push({ timestamp, level: "INFO", message: `Console issued command: /${cleanCmd}` });
-
-  let responseMessage = "";
-  switch (baseCmd.toLowerCase()) {
-    case "op":
-      const opTarget = args[0] || "player";
-      mockPlayers = mockPlayers.map((p) => p.username.toLowerCase() === opTarget.toLowerCase() ? { ...p, isOp: true } : p);
-      responseMessage = `Promoted ${opTarget} to server operator`;
-      break;
-    case "deop":
-      const deopTarget = args[0] || "player";
-      mockPlayers = mockPlayers.map((p) => p.username.toLowerCase() === deopTarget.toLowerCase() ? { ...p, isOp: false } : p);
-      responseMessage = `Demoted ${deopTarget} from server operator`;
-      break;
-    case "say":
-      responseMessage = `[Server] ${args.join(" ")}`;
-      break;
-    case "whitelist":
-      if (args[0] === "add" && args[1]) {
-        const username = args[1];
-        if (!mockWhitelist.some((w) => w.username.toLowerCase() === username.toLowerCase())) {
-          mockWhitelist.push({ id: `w${Date.now()}`, username, addedAt: new Date().toISOString().slice(0, 16).replace("T", " ") });
-        }
-        responseMessage = `Added ${username} to the whitelist`;
-      } else if (args[0] === "remove" && args[1]) {
-        const username = args[1];
-        mockWhitelist = mockWhitelist.filter((w) => w.username.toLowerCase() !== username.toLowerCase());
-        responseMessage = `Removed ${username} from the whitelist`;
-      } else {
-        responseMessage = `Whitelist options: add <player>, remove <player>`;
-      }
-      break;
-    default:
-      responseMessage = `Command "/${baseCmd}" executed.`;
+  const logEntry1 = { timestamp, level: "INFO" as const, message: `Console issued command: /${cleanCmd}` };
+  mockLogs.push(logEntry1);
+  if (backendUrl) {
+    lastFetchedLogs.push(logEntry1);
   }
 
-  mockLogs.push({ timestamp, level: "INFO", message: responseMessage });
+  let responseMessage = "";
+  if (backendUrl) {
+    let base = backendUrl;
+    if (!/^https?:\/\//i.test(base)) {
+      base = `http://${base}`;
+    }
+    base = base.replace(/\/+$/, "");
+
+    try {
+      const res = await fetch(`${base}/api/server/command`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ command: cleanCmd }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+
+      const data = await res.json();
+      responseMessage = data.response || `Command executed successfully.`;
+    } catch (e) {
+      console.error("Error executing console command:", e);
+      responseMessage = `Error executing command: ${(e as Error).message}`;
+    }
+  } else {
+    // Fallback dummy implementation
+    switch (baseCmd.toLowerCase()) {
+      case "op":
+        const opTarget = args[0] || "player";
+        mockPlayers = mockPlayers.map((p) => p.username.toLowerCase() === opTarget.toLowerCase() ? { ...p, isOp: true } : p);
+        responseMessage = `Promoted ${opTarget} to server operator`;
+        break;
+      case "deop":
+        const deopTarget = args[0] || "player";
+        mockPlayers = mockPlayers.map((p) => p.username.toLowerCase() === deopTarget.toLowerCase() ? { ...p, isOp: false } : p);
+        responseMessage = `Demoted ${deopTarget} from server operator`;
+        break;
+      case "say":
+        responseMessage = `[Server] ${args.join(" ")}`;
+        break;
+      case "whitelist":
+        if (args[0] === "add" && args[1]) {
+          const username = args[1];
+          if (!mockWhitelist.some((w) => w.username.toLowerCase() === username.toLowerCase())) {
+            mockWhitelist.push({ id: `w${Date.now()}`, username, addedAt: new Date().toISOString().slice(0, 16).replace("T", " ") });
+          }
+          responseMessage = `Added ${username} to the whitelist`;
+        } else if (args[0] === "remove" && args[1]) {
+          const username = args[1];
+          mockWhitelist = mockWhitelist.filter((w) => w.username.toLowerCase() !== username.toLowerCase());
+          responseMessage = `Removed ${username} from the whitelist`;
+        } else {
+          responseMessage = `Whitelist options: add <player>, remove <player>`;
+        }
+        break;
+      default:
+        responseMessage = `Command "/${baseCmd}" executed.`;
+    }
+  }
+
+  const logEntry2 = { timestamp, level: "INFO" as const, message: responseMessage };
+  mockLogs.push(logEntry2);
+  if (backendUrl) {
+    lastFetchedLogs.push(logEntry2);
+  }
   return responseMessage;
 }
 
@@ -351,42 +558,17 @@ export async function updateServerProperty(name: string, value: string): Promise
  * Control server power transitions.
  */
 export async function toggleServerPower(action: "start" | "stop" | "restart"): Promise<void> {
-  // TODO: Start screen session, docker run, or systemctl start service
-  await delay(500);
-  const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+  if (!backendUrl) {
+    // Fallback dummy implementation
+    await delay(500);
+    const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
 
-  if (action === "start") {
-    serverState = "STARTING";
-    startTime = Date.now();
-    mockLogs.push({ timestamp, level: "INFO", message: "Server start triggered. Launching JVM..." });
-    
-    // Simulate server boot process finishing after 4 seconds
-    setTimeout(() => {
-      serverState = "ONLINE";
-      startTime = Date.now();
-      const onlineTime = new Date().toLocaleTimeString("en-US", { hour12: false });
-      mockLogs.push({ timestamp: onlineTime, level: "INFO", message: "Minecraft server started successfully on port 25565" });
-      mockPlayers = mockPlayers.map((p) => p.id === "1" || p.id === "2" ? { ...p, online: true } : p);
-    }, 4000);
-
-  } else if (action === "stop") {
-    serverState = "OFFLINE";
-    mockLogs.push({ timestamp, level: "INFO", message: "Stopping server..." });
-    mockLogs.push({ timestamp, level: "INFO", message: "Saving chunks..." });
-    mockLogs.push({ timestamp, level: "INFO", message: "Server stopped." });
-    mockPlayers = mockPlayers.map((p) => ({ ...p, online: false, ping: 0 }));
-
-  } else if (action === "restart") {
-    serverState = "OFFLINE";
-    mockPlayers = mockPlayers.map((p) => ({ ...p, online: false, ping: 0 }));
-    mockLogs.push({ timestamp, level: "INFO", message: "Restart triggered. Stopping server..." });
-    
-    setTimeout(() => {
+    if (action === "start") {
       serverState = "STARTING";
       startTime = Date.now();
-      const startLogTime = new Date().toLocaleTimeString("en-US", { hour12: false });
-      mockLogs.push({ timestamp: startLogTime, level: "INFO", message: "Launching JVM after restart..." });
-
+      mockLogs.push({ timestamp, level: "INFO", message: "Server start triggered. Launching JVM..." });
+      
       setTimeout(() => {
         serverState = "ONLINE";
         startTime = Date.now();
@@ -394,6 +576,63 @@ export async function toggleServerPower(action: "start" | "stop" | "restart"): P
         mockLogs.push({ timestamp: onlineTime, level: "INFO", message: "Minecraft server started successfully on port 25565" });
         mockPlayers = mockPlayers.map((p) => p.id === "1" || p.id === "2" ? { ...p, online: true } : p);
       }, 4000);
-    }, 1500);
+
+    } else if (action === "stop") {
+      serverState = "OFFLINE";
+      mockLogs.push({ timestamp, level: "INFO", message: "Stopping server..." });
+      mockLogs.push({ timestamp, level: "INFO", message: "Saving chunks..." });
+      mockLogs.push({ timestamp, level: "INFO", message: "Server stopped." });
+      mockPlayers = mockPlayers.map((p) => ({ ...p, online: false, ping: 0 }));
+
+    } else if (action === "restart") {
+      serverState = "OFFLINE";
+      mockPlayers = mockPlayers.map((p) => ({ ...p, online: false, ping: 0 }));
+      mockLogs.push({ timestamp, level: "INFO", message: "Restart triggered. Stopping server..." });
+      
+      setTimeout(() => {
+        serverState = "STARTING";
+        startTime = Date.now();
+        const startLogTime = new Date().toLocaleTimeString("en-US", { hour12: false });
+        mockLogs.push({ timestamp: startLogTime, level: "INFO", message: "Launching JVM after restart..." });
+
+        setTimeout(() => {
+          serverState = "ONLINE";
+          startTime = Date.now();
+          const onlineTime = new Date().toLocaleTimeString("en-US", { hour12: false });
+          mockLogs.push({ timestamp: onlineTime, level: "INFO", message: "Minecraft server started successfully on port 25565" });
+          mockPlayers = mockPlayers.map((p) => p.id === "1" || p.id === "2" ? { ...p, online: true } : p);
+        }, 4000);
+      }, 1500);
+    }
+    return;
+  }
+
+  // Backend implementation
+  let base = backendUrl;
+  if (!/^https?:\/\//i.test(base)) {
+    base = `http://${base}`;
+  }
+  base = base.replace(/\/+$/, "");
+
+  if (action === "start") {
+    const res = await fetch(`${base}/api/server/start`, { method: "POST" });
+    if (!res.ok) {
+      throw new Error(`Failed to start server: status ${res.status}`);
+    }
+  } else if (action === "stop") {
+    const res = await fetch(`${base}/api/server/stop`, { method: "POST" });
+    if (!res.ok) {
+      throw new Error(`Failed to stop server: status ${res.status}`);
+    }
+  } else if (action === "restart") {
+    const resStop = await fetch(`${base}/api/server/stop`, { method: "POST" });
+    if (!resStop.ok) {
+      throw new Error(`Failed to stop server during restart: status ${resStop.status}`);
+    }
+    await delay(2000);
+    const resStart = await fetch(`${base}/api/server/start`, { method: "POST" });
+    if (!resStart.ok) {
+      throw new Error(`Failed to start server during restart: status ${resStart.status}`);
+    }
   }
 }

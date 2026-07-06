@@ -4,7 +4,7 @@ import React from "react";
 import { Cpu, Activity, Database, Shield } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { ServerStatus } from "@/lib/mc-server";
+import { ServerStatus, formatUptime } from "@/lib/mc-server";
 
 interface OverviewTabProps {
   status: ServerStatus | null;
@@ -83,7 +83,7 @@ export default function OverviewTab({ status, userRole }: OverviewTabProps) {
               <div>IP Address: <span className="text-zinc-200">{status?.ipAddress}</span></div>
               <div>Server Port: <span className="text-zinc-200">{status?.port}</span></div>
               <div>Engine: <span className="text-zinc-200">{status?.version}</span></div>
-              <div>Uptime: <span className="text-zinc-200">{status ? `${Math.floor(status.uptime / 60)} min` : "—"}</span></div>
+              <div>Uptime: <span className="text-zinc-200">{status ? formatUptime(status.uptime) : "—"}</span></div>
             </div>
           </div>
         </Card>

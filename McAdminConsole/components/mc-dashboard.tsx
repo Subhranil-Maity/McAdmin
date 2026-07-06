@@ -22,6 +22,7 @@ import {
   WhitelistEntry,
   Plugin,
   ServerProperty,
+  formatUptime,
 } from "@/lib/mc-server";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -132,6 +133,13 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
 
   // Power Actions Handler
   const handlePowerAction = async (action: "start" | "stop" | "restart") => {
+    if (action === "stop" || action === "restart") {
+      const confirmAction = window.confirm(
+        `Are you sure you want to ${action === "stop" ? "stop" : "restart"} the server? This will disconnect all online players.`
+      );
+      if (!confirmAction) return;
+    }
+
     setPowerActionLoading(action);
     try {
       // Optimistic state updates
@@ -383,7 +391,14 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
   const menuItems = [
     { id: "console", label: "Console", icon: Terminal, badge: null },
     { id: "overview", label: "Overview", icon: Activity, badge: null },
-    { id: "players", label: "Players", icon: Users, badge: players.filter(p => p.online).length ? `${players.filter(p => p.online).length}` : null },
+    { 
+      id: "players", 
+      label: "Players", 
+      icon: Users, 
+      badge: status?.activePlayers !== undefined 
+        ? (status.activePlayers > 0 ? `${status.activePlayers}` : null) 
+        : (players.filter(p => p.online).length ? `${players.filter(p => p.online).length}` : null)
+    },
     { id: "whitelist", label: "Whitelist", icon: UserCheck, badge: whitelist.length ? `${whitelist.length}` : null },
     { id: "plugins", label: "Plugins", icon: Settings, badge: plugins.length ? `${plugins.filter(p => p.enabled).length}/${plugins.length}` : null },
     { id: "properties", label: "Properties", icon: FileText, badge: null },
@@ -479,7 +494,7 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
             </h2>
             <p className="text-xs text-zinc-500">
               {status?.status === "ONLINE"
-                ? `Uptime: ${Math.floor(status.uptime / 60)}m ${status.uptime % 60}s`
+                ? `Uptime: ${formatUptime(status.uptime)}${status.activePlayers !== undefined ? ` • Players: ${status.activePlayers}/${status.maxPlayers || 10}` : ""}`
                 : status?.status === "STARTING"
                 ? "Loading server modules..."
                 : "Server is offline"}

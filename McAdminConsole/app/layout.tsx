@@ -5,8 +5,7 @@ import "./globals.css";
 import { cn } from "@/lib/utils";
 import { shadcn } from "@clerk/ui/themes";
 import { AuthButtons } from "@/components/auth-buttons";
-import { currentUser } from "@clerk/nextjs/server";
-import { getUserRole, canAccessManageUser } from "@/types/roles";
+import { NavbarLinks } from "@/components/navbar-links";
 import Link from "next/link";
 
 const inter = Inter({subsets:['latin'],variable:'--font-sans'});
@@ -26,15 +25,11 @@ export const metadata: Metadata = {
   description: "Clerk User Management and Role Panel",
 };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const user = await currentUser();
-  const role = user ? getUserRole(user.publicMetadata) : null;
-  const canManage = role ? canAccessManageUser(role) : false;
-
   return (
     <html
       lang="en"
@@ -47,24 +42,7 @@ export default async function RootLayout({
               <Link href="/" className="font-bold text-lg text-zinc-900 dark:text-zinc-50 hover:opacity-80 transition-opacity">
                 MC Admin
               </Link>
-              {user && (
-                <nav className="flex items-center gap-4">
-                  <Link
-                    href="/dashboard"
-                    className="text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors"
-                  >
-                    Dashboard
-                  </Link>
-                  {canManage && (
-                    <Link
-                      href="/manageuser"
-                      className="text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors"
-                    >
-                      Manage Users
-                    </Link>
-                  )}
-                </nav>
-              )}
+              <NavbarLinks />
             </div>
             <AuthButtons />
           </header>
