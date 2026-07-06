@@ -39,12 +39,10 @@ Returns currently online players via RCON `list` command.
 
 ### Response `200`
 
+Returns a JSON array of online player names:
+
 ```json
-{
-  "online": 3,
-  "max": 20,
-  "players": ["Notch", "Jeb", "Herobrine"]
-}
+["Notch", "Jeb", "Herobrine"]
 ```
 
 ### Error `409`

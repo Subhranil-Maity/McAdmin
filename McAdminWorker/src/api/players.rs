@@ -26,12 +26,7 @@ pub(crate) struct PlayerInfo {
     banned: bool,
 }
 
-#[derive(Serialize)]
-pub(crate) struct OnlinePlayersResponse {
-    online: usize,
-    max: usize,
-    players: Vec<String>,
-}
+
 
 #[derive(Serialize)]
 pub(crate) struct PlayerActionResponse {
@@ -76,7 +71,7 @@ pub(crate) async fn get_all_players(
 
 pub(crate) async fn get_online_players(
     State(state): State<AppState>,
-) -> Result<Json<OnlinePlayersResponse>, StatusCode> {
+) -> Result<Json<Vec<String>>, StatusCode> {
     {
         let runtime = state.minecraft.lock().await;
         if runtime.state != MinecraftServerState::Online {
@@ -89,13 +84,7 @@ pub(crate) async fn get_online_players(
         StatusCode::BAD_GATEWAY
     })?;
 
-    let (online, max, players) = parse_list_response(&response).unwrap_or((0, 0, Vec::new()));
-
-    Ok(Json(OnlinePlayersResponse {
-        online,
-        max,
-        players,
-    }))
+    Ok(Json(parse_online_players(&response)))
 }
 
 pub(crate) async fn ban_player(
@@ -490,23 +479,17 @@ pub(crate) async fn deop_player(
     }
 }
 
-fn parse_list_response(text: &str) -> Option<(usize, usize, Vec<String>)> {
-    let text = text.trim();
-    let text = text.strip_prefix("There are ")?;
-    let (online_str, rest) = text.split_once(" of a max of ")?;
-    let online: usize = online_str.parse().ok()?;
-    let (max_str, rest) = rest.split_once(" players online")?;
-    let max: usize = max_str.parse().ok()?;
-    let players = if let Some(list) = rest
-        .strip_prefix(": ")
-        .or_else(|| rest.strip_prefix(":"))
-    {
-        list.split(", ")
-            .map(String::from)
+fn parse_online_players(rcon_response: &str) -> Vec<String> {
+    if let Some((_, player_part)) = rcon_response.split_once(':') {
+        let trimmed = player_part.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+        return trimmed
+            .split(',')
+            .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
-            .collect()
-    } else {
-        Vec::new()
-    };
-    Some((online, max, players))
+            .collect();
+    }
+    Vec::new()
 }
