@@ -8,7 +8,9 @@ use axum::{
 };
 use circular_queue::CircularQueue;
 use config::{ConfigEntry, ConfigManager};
-use serde::Serialize;
+use rcon_tokio::{RconClient, RconClientConfig};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::env;
 use std::io;
 use std::path::{Path as FsPath, PathBuf};
@@ -16,6 +18,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex};
 use sysinfo::System;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::{Duration, sleep};
@@ -27,6 +30,9 @@ use tracing::{Level, error, info};
 
 const LOG_BUFFER_CAPACITY: usize = 15_000;
 const RECENT_LOG_LINES: usize = 250;
+const SERVER_PROPERTIES_FILE: &str = "server.properties";
+
+type ServerProperties = BTreeMap<String, String>;
 
 #[derive(Clone)]
 struct AppState {
@@ -34,6 +40,7 @@ struct AppState {
     config: Arc<ConfigManager>,
     minecraft: Arc<TokioMutex<MinecraftServerRuntime>>,
     logs: LogBuffer,
+    rcon: Arc<RconManager>,
     server_dir: Arc<PathBuf>,
 }
 
@@ -58,6 +65,46 @@ impl LogBuffer {
 
     pub fn push(&self, line: String) {
         self.lines.lock().unwrap().push(line);
+    }
+}
+
+struct RconManager {
+    config: RconClientConfig,
+    client: TokioMutex<Option<RconClient<TcpStream>>>,
+}
+
+impl RconManager {
+    fn new(config: RconClientConfig) -> Self {
+        Self {
+            config,
+            client: TokioMutex::new(None),
+        }
+    }
+
+    async fn execute(&self, command: &str) -> Result<String, String> {
+        let mut client = self.client.lock().await;
+
+        if client.is_none() {
+            *client = Some(
+                RconClient::connect(self.config.clone())
+                    .await
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+
+        let result = client
+            .as_mut()
+            .expect("RCON client must be initialized")
+            .execute(command)
+            .await;
+
+        match result {
+            Ok(response) => Ok(response),
+            Err(error) => {
+                *client = None;
+                Err(error.to_string())
+            }
+        }
     }
 }
 
@@ -116,6 +163,18 @@ struct StopServerResponse {
     process_id: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ServerCommandRequest {
+    command: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ServerCommandResponse {
+    status: &'static str,
+    command: String,
+    response: String,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt().with_target(false).init();
@@ -130,6 +189,16 @@ async fn main() {
     let home_dir = env::var("HOME_DIR").expect("HOME_DIR must be set");
     let server_dir = Arc::new(PathBuf::from(home_dir));
     let config_path = server_dir.join("admin_worker_config.json");
+    let rcon_config = RconClientConfig::new(
+        env::var("RCON_HOST").expect("RCON_HOST must be set"),
+        env::var("RCON_PORT")
+            .expect("RCON_PORT must be set")
+            .parse::<u16>()
+            .expect("RCON_PORT must be a valid u16 port"),
+        env::var("RCON_PASSWORD").expect("RCON_PASSWORD must be set"),
+    )
+    .auto_reconnect(true)
+    .max_reconnect_attempts(3);
 
     let state = AppState {
         system: Arc::new(TokioMutex::new(System::new_all())),
@@ -144,6 +213,7 @@ async fn main() {
             child: None,
         })),
         logs: LogBuffer::new(LOG_BUFFER_CAPACITY),
+        rcon: Arc::new(RconManager::new(rcon_config)),
         server_dir,
     };
 
@@ -154,6 +224,11 @@ async fn main() {
         .route("/api/status", get(server_status))
         .route("/api/server/start", post(start_server))
         .route("/api/server/stop", post(stop_server))
+        .route("/api/server/command", post(send_server_command))
+        .route(
+            "/api/server/properties",
+            get(get_server_properties).post(update_server_properties),
+        )
         .route("/api/config", get(list_config))
         .route("/api/config/{key}", get(get_config))
         .layer(
@@ -378,6 +453,70 @@ async fn stop_server(
     }))
 }
 
+async fn send_server_command(
+    State(state): State<AppState>,
+    Json(payload): Json<ServerCommandRequest>,
+) -> Result<Json<ServerCommandResponse>, StatusCode> {
+    let command = payload.command.trim();
+    if command.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let response = state.rcon.execute(command).await.map_err(|error| {
+        error!("RCON command failed: {error}");
+        StatusCode::BAD_GATEWAY
+    })?;
+
+    Ok(Json(ServerCommandResponse {
+        status: "ok",
+        command: command.to_string(),
+        response,
+    }))
+}
+
+async fn get_server_properties(
+    State(state): State<AppState>,
+) -> Result<Json<ServerProperties>, StatusCode> {
+    let properties_path = state.server_dir.join(SERVER_PROPERTIES_FILE);
+    let file_contents = tokio::fs::read_to_string(&properties_path)
+        .await
+        .map_err(|error| {
+            error!(
+                "failed to read server properties from {}: {error}",
+                properties_path.display()
+            );
+            if error.kind() == io::ErrorKind::NotFound {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
+
+    Ok(Json(parse_server_properties(&file_contents)))
+}
+
+async fn update_server_properties(
+    State(state): State<AppState>,
+    Json(properties): Json<ServerProperties>,
+) -> Result<Json<ServerProperties>, StatusCode> {
+    if properties.keys().any(|key| key.trim().is_empty()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let properties_path = state.server_dir.join(SERVER_PROPERTIES_FILE);
+    write_server_properties(&properties_path, &properties)
+        .await
+        .map_err(|error| {
+            error!(
+                "failed to write server properties to {}: {error}",
+                properties_path.display()
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(properties))
+}
+
 async fn start_minecraft_server(
     jar_path: &FsPath,
     server_dir: &FsPath,
@@ -430,6 +569,34 @@ async fn start_minecraft_server(
     minecraft.child = Some(child);
 
     Ok(())
+}
+
+fn parse_server_properties(file_contents: &str) -> ServerProperties {
+    file_contents
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+
+            let (key, value) = line.split_once('=')?;
+            Some((key.trim().to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+async fn write_server_properties(path: &FsPath, properties: &ServerProperties) -> io::Result<()> {
+    let mut file_contents = String::new();
+
+    for (key, value) in properties {
+        file_contents.push_str(key);
+        file_contents.push('=');
+        file_contents.push_str(value);
+        file_contents.push('\n');
+    }
+
+    tokio::fs::write(path, file_contents).await
 }
 
 fn spawn_log_reader<R>(stream: R, log_buffer: LogBuffer, prefix: Option<&'static str>)
