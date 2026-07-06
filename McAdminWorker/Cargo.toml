@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 axum = "0.8.9"
+chrono = "0.4"
 circular-queue = "0.2.7"
 dotenvy = "0.15.7"
 rcon-tokio = "0.1.4"

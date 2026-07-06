@@ -1,9 +1,11 @@
 mod api;
 mod config;
+mod minecraft_files;
 
 use api::{
-    get_config, get_server_properties, health, list_config, send_server_command, server_status,
-    start_server, stop_server, update_server_properties,
+    ban_player, deop_player, dewhitelist_player, get_all_players, get_config, get_online_players,
+    get_server_properties, health, list_config, op_player, send_server_command, server_status,
+    start_server, stop_server, unban_player, update_server_properties, whitelist_player,
 };
 use axum::{
     Router,
@@ -184,6 +186,14 @@ async fn main() {
             "/api/server/properties",
             get(get_server_properties).post(update_server_properties),
         )
+        .route("/api/server/players", get(get_all_players))
+        .route("/api/server/players/online", get(get_online_players))
+        .route("/api/server/players/ban", post(ban_player))
+        .route("/api/server/players/unban", post(unban_player))
+        .route("/api/server/players/whitelist", post(whitelist_player))
+        .route("/api/server/players/dewhitelist", post(dewhitelist_player))
+        .route("/api/server/players/op", post(op_player))
+        .route("/api/server/players/deop", post(deop_player))
         .route("/api/config", get(list_config))
         .route("/api/config/{key}", get(get_config))
         .layer(
