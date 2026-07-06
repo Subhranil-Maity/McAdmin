@@ -1,16 +1,18 @@
+mod api;
 mod config;
 
+use api::{
+    get_config, get_server_properties, health, list_config, send_server_command, server_status,
+    start_server, stop_server, update_server_properties,
+};
 use axum::{
-    Json, Router,
-    extract::{Path, State},
-    http::{HeaderValue, Method, StatusCode, request::Parts},
+    Router,
+    http::{HeaderValue, Method, request::Parts},
     routing::{get, post},
 };
 use circular_queue::CircularQueue;
-use config::{ConfigEntry, ConfigManager};
+use config::ConfigManager;
 use rcon_tokio::{RconClient, RconClientConfig};
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::env;
 use std::io;
 use std::path::{Path as FsPath, PathBuf};
@@ -29,19 +31,15 @@ use tower_http::{
 use tracing::{Level, error, info};
 
 const LOG_BUFFER_CAPACITY: usize = 15_000;
-const RECENT_LOG_LINES: usize = 250;
-const SERVER_PROPERTIES_FILE: &str = "server.properties";
-
-type ServerProperties = BTreeMap<String, String>;
 
 #[derive(Clone)]
-struct AppState {
-    system: Arc<TokioMutex<System>>,
-    config: Arc<ConfigManager>,
-    minecraft: Arc<TokioMutex<MinecraftServerRuntime>>,
-    logs: LogBuffer,
-    rcon: Arc<RconManager>,
-    server_dir: Arc<PathBuf>,
+pub(crate) struct AppState {
+    pub(crate) system: Arc<TokioMutex<System>>,
+    pub(crate) config: Arc<ConfigManager>,
+    pub(crate) minecraft: Arc<TokioMutex<MinecraftServerRuntime>>,
+    pub(crate) logs: LogBuffer,
+    pub(crate) rcon: Arc<RconManager>,
+    pub(crate) server_dir: Arc<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -56,14 +54,14 @@ impl LogBuffer {
         }
     }
 
-    pub fn get_last_n(&self, n: usize) -> Vec<String> {
+    pub(crate) fn get_last_n(&self, n: usize) -> Vec<String> {
         let lock = self.lines.lock().unwrap();
         let mut result = lock.iter().take(n).cloned().collect::<Vec<_>>();
         result.reverse();
         result
     }
 
-    pub fn push(&self, line: String) {
+    pub(crate) fn push(&self, line: String) {
         self.lines.lock().unwrap().push(line);
     }
 }
@@ -81,7 +79,7 @@ impl RconManager {
         }
     }
 
-    async fn execute(&self, command: &str) -> Result<String, String> {
+    pub(crate) async fn execute(&self, command: &str) -> Result<String, String> {
         let mut client = self.client.lock().await;
 
         if client.is_none() {
@@ -108,33 +106,15 @@ impl RconManager {
     }
 }
 
-#[derive(Serialize)]
-struct HealthResponse {
-    status: &'static str,
-    service: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ServerStatusResponse {
-    pub status: String,
-    pub cpu_usage: f32,
-    pub ram_allocated_mb: u64,
-    pub ram_used_mb: u64,
-    pub uptime_seconds: u64,
-    pub active_players: u32,
-    pub max_players: u32,
-    pub recent_logs: Vec<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MinecraftServerState {
+pub(crate) enum MinecraftServerState {
     Offline,
     Starting,
     Online,
 }
 
 impl MinecraftServerState {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Offline => "OFFLINE",
             Self::Starting => "STARTING",
@@ -144,35 +124,10 @@ impl MinecraftServerState {
 }
 
 #[derive(Debug)]
-struct MinecraftServerRuntime {
-    state: MinecraftServerState,
-    process_id: Option<u32>,
-    child: Option<Child>,
-}
-
-#[derive(Debug, Serialize)]
-struct StartServerResponse {
-    status: &'static str,
-    ram_gb: u32,
-    process_id: Option<u32>,
-}
-
-#[derive(Debug, Serialize)]
-struct StopServerResponse {
-    status: &'static str,
-    process_id: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ServerCommandRequest {
-    command: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ServerCommandResponse {
-    status: &'static str,
-    command: String,
-    response: String,
+pub(crate) struct MinecraftServerRuntime {
+    pub(crate) state: MinecraftServerState,
+    pub(crate) process_id: Option<u32>,
+    pub(crate) child: Option<Child>,
 }
 
 #[tokio::main]
@@ -250,13 +205,6 @@ async fn main() {
         .expect("failed to start Axum server");
 }
 
-async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ok",
-        service: "mc_admin_worker",
-    })
-}
-
 fn cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(
@@ -283,87 +231,7 @@ fn is_local_origin(origin: &HeaderValue) -> bool {
     })
 }
 
-async fn server_status(State(state): State<AppState>) -> Json<ServerStatusResponse> {
-    let mut system = state.system.lock().await;
-    system.refresh_memory();
-    system.refresh_cpu_usage();
-    let server_status = state.minecraft.lock().await.state.as_str().to_string();
-
-    Json(ServerStatusResponse {
-        status: server_status,
-        cpu_usage: system.global_cpu_usage(),
-        ram_allocated_mb: system.total_memory() / 1024 / 1024,
-        ram_used_mb: system.used_memory() / 1024 / 1024,
-        uptime_seconds: System::uptime(),
-        active_players: 0,
-        max_players: 10,
-        recent_logs: state.logs.get_last_n(RECENT_LOG_LINES),
-    })
-}
-
-async fn start_server(
-    State(state): State<AppState>,
-) -> Result<Json<StartServerResponse>, StatusCode> {
-    info!("start server requested");
-
-    if !state.server_dir.exists() {
-        error!("server directory missing: {}", state.server_dir.display());
-        return Err(StatusCode::NOT_FOUND);
-    }
-
-    let ram_gb = state.config.get_server_ram().await;
-    let jar_path = Arc::new(resolve_jar_path(state.config.get_jar_path().await));
-    if !jar_path.exists() {
-        error!("jar file missing: {}", jar_path.display());
-        return Err(StatusCode::NOT_FOUND);
-    }
-
-    info!(
-        "start server requested: jar_path={}, server_dir={}, ram_gb={}",
-        jar_path.display(),
-        state.server_dir.display(),
-        ram_gb
-    );
-
-    let process_id = {
-        let mut minecraft = state.minecraft.lock().await;
-        if minecraft.state != MinecraftServerState::Offline {
-            return Err(StatusCode::CONFLICT);
-        }
-
-        minecraft.state = MinecraftServerState::Starting;
-        minecraft.process_id = None;
-        minecraft.child = None;
-
-        if let Err(error) = start_minecraft_server(
-            &jar_path,
-            &state.server_dir,
-            ram_gb,
-            state.logs.clone(),
-            &mut minecraft,
-        )
-        .await
-        {
-            error!("Minecraft server failed: {error}");
-            minecraft.state = MinecraftServerState::Offline;
-            minecraft.process_id = None;
-            minecraft.child = None;
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-
-        minecraft.process_id
-    };
-
-    tokio::spawn(monitor_minecraft_server(state.minecraft.clone()));
-
-    Ok(Json(StartServerResponse {
-        status: MinecraftServerState::Online.as_str(),
-        ram_gb,
-        process_id,
-    }))
-}
-
-async fn monitor_minecraft_server(minecraft: Arc<TokioMutex<MinecraftServerRuntime>>) {
+pub(crate) async fn monitor_minecraft_server(minecraft: Arc<TokioMutex<MinecraftServerRuntime>>) {
     loop {
         sleep(Duration::from_secs(1)).await;
 
@@ -399,20 +267,7 @@ async fn monitor_minecraft_server(minecraft: Arc<TokioMutex<MinecraftServerRunti
     }
 }
 
-async fn list_config(State(state): State<AppState>) -> Json<Vec<ConfigEntry>> {
-    Json(state.config.list().await)
-}
-
-async fn get_config(
-    State(state): State<AppState>,
-    Path(key): Path<String>,
-) -> Result<Json<ConfigEntry>, StatusCode> {
-    let value = state.config.get(&key).await.ok_or(StatusCode::NOT_FOUND)?;
-
-    Ok(Json(ConfigEntry { key, value }))
-}
-
-fn resolve_jar_path(jar_path: PathBuf) -> PathBuf {
+pub(crate) fn resolve_jar_path(jar_path: PathBuf) -> PathBuf {
     if jar_path.is_absolute() {
         jar_path
     } else {
@@ -422,102 +277,7 @@ fn resolve_jar_path(jar_path: PathBuf) -> PathBuf {
     }
 }
 
-async fn stop_server(
-    State(state): State<AppState>,
-) -> Result<Json<StopServerResponse>, StatusCode> {
-    info!("stop server requested");
-
-    let mut child = {
-        let mut minecraft = state.minecraft.lock().await;
-        if minecraft.state == MinecraftServerState::Offline {
-            error!("stop server requested while server is offline");
-            return Err(StatusCode::CONFLICT);
-        }
-
-        minecraft.state = MinecraftServerState::Offline;
-        minecraft.process_id = None;
-        minecraft.child.take()
-    };
-
-    if let Some(child) = child.as_mut() {
-        child
-            .kill()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let _ = child.wait().await;
-    }
-
-    Ok(Json(StopServerResponse {
-        status: MinecraftServerState::Offline.as_str(),
-        process_id: None,
-    }))
-}
-
-async fn send_server_command(
-    State(state): State<AppState>,
-    Json(payload): Json<ServerCommandRequest>,
-) -> Result<Json<ServerCommandResponse>, StatusCode> {
-    let command = payload.command.trim();
-    if command.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
-    let response = state.rcon.execute(command).await.map_err(|error| {
-        error!("RCON command failed: {error}");
-        StatusCode::BAD_GATEWAY
-    })?;
-
-    Ok(Json(ServerCommandResponse {
-        status: "ok",
-        command: command.to_string(),
-        response,
-    }))
-}
-
-async fn get_server_properties(
-    State(state): State<AppState>,
-) -> Result<Json<ServerProperties>, StatusCode> {
-    let properties_path = state.server_dir.join(SERVER_PROPERTIES_FILE);
-    let file_contents = tokio::fs::read_to_string(&properties_path)
-        .await
-        .map_err(|error| {
-            error!(
-                "failed to read server properties from {}: {error}",
-                properties_path.display()
-            );
-            if error.kind() == io::ErrorKind::NotFound {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-        })?;
-
-    Ok(Json(parse_server_properties(&file_contents)))
-}
-
-async fn update_server_properties(
-    State(state): State<AppState>,
-    Json(properties): Json<ServerProperties>,
-) -> Result<Json<ServerProperties>, StatusCode> {
-    if properties.keys().any(|key| key.trim().is_empty()) {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
-    let properties_path = state.server_dir.join(SERVER_PROPERTIES_FILE);
-    write_server_properties(&properties_path, &properties)
-        .await
-        .map_err(|error| {
-            error!(
-                "failed to write server properties to {}: {error}",
-                properties_path.display()
-            );
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    Ok(Json(properties))
-}
-
-async fn start_minecraft_server(
+pub(crate) async fn start_minecraft_server(
     jar_path: &FsPath,
     server_dir: &FsPath,
     ram_gb: u32,
@@ -569,34 +329,6 @@ async fn start_minecraft_server(
     minecraft.child = Some(child);
 
     Ok(())
-}
-
-fn parse_server_properties(file_contents: &str) -> ServerProperties {
-    file_contents
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                return None;
-            }
-
-            let (key, value) = line.split_once('=')?;
-            Some((key.trim().to_string(), value.trim().to_string()))
-        })
-        .collect()
-}
-
-async fn write_server_properties(path: &FsPath, properties: &ServerProperties) -> io::Result<()> {
-    let mut file_contents = String::new();
-
-    for (key, value) in properties {
-        file_contents.push_str(key);
-        file_contents.push('=');
-        file_contents.push_str(value);
-        file_contents.push('\n');
-    }
-
-    tokio::fs::write(path, file_contents).await
 }
 
 fn spawn_log_reader<R>(stream: R, log_buffer: LogBuffer, prefix: Option<&'static str>)
