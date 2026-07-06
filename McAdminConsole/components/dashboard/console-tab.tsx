@@ -5,7 +5,7 @@ import { Terminal } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { ConsoleLog } from "@/lib/mc-server";
+import { ConsoleLog, CommandResponse } from "@/lib/mc-server";
 
 interface ConsoleTabProps {
   logs: ConsoleLog[];
@@ -13,6 +13,7 @@ interface ConsoleTabProps {
   setCommandInput: (val: string) => void;
   handleSendCommand: (e: React.FormEvent) => void;
   consoleEndRef: React.RefObject<HTMLDivElement | null>;
+  lastCommandResponse?: CommandResponse | null;
 }
 
 export default function ConsoleTab({
@@ -21,6 +22,7 @@ export default function ConsoleTab({
   setCommandInput,
   handleSendCommand,
   consoleEndRef,
+  lastCommandResponse,
 }: ConsoleTabProps) {
   return (
     <Card className="border-zinc-850 bg-zinc-950 p-4 rounded-2xl flex flex-col shadow-2xl">
@@ -66,6 +68,32 @@ export default function ConsoleTab({
           Send
         </Button>
       </form>
+
+      {/* Formatted last command response display */}
+      {lastCommandResponse && (
+        <div className="mt-4 p-4 rounded-xl border border-zinc-900 bg-zinc-900/10 backdrop-blur-sm space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider font-mono">Last command telemetry</span>
+            <div className="flex items-center gap-1.5">
+              <span className={`w-1.5 h-1.5 rounded-full ${lastCommandResponse.status === "ok" ? "bg-emerald-400 shadow-[0_0_6px_#10b981]" : "bg-rose-500 shadow-[0_0_6px_#f43f5e]"}`} />
+              <span className={`text-[10px] font-extrabold uppercase font-mono ${lastCommandResponse.status === "ok" ? "text-emerald-400" : "text-rose-400"}`}>
+                {lastCommandResponse.status}
+              </span>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-2 text-xs font-mono pt-1">
+            <div className="md:col-span-1">
+              <span className="text-zinc-500">Command:</span>
+              <p className="text-zinc-300 font-semibold mt-0.5 truncate">{lastCommandResponse.command}</p>
+            </div>
+            <div className="md:col-span-3">
+              <span className="text-zinc-500">Response:</span>
+              <p className="text-zinc-200 mt-0.5 whitespace-pre-wrap leading-relaxed max-h-24 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-850">{lastCommandResponse.response}</p>
+            </div>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

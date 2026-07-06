@@ -22,6 +22,12 @@ export interface ConsoleLog {
   message: string;
 }
 
+export interface CommandResponse {
+  status: string;
+  command: string;
+  response: string;
+}
+
 export interface Player {
   id: string;
   username: string;
@@ -319,7 +325,7 @@ export async function getConsoleLogs(): Promise<ConsoleLog[]> {
 /**
  * Executes a console command.
  */
-export async function sendConsoleCommand(command: string): Promise<string> {
+export async function sendConsoleCommand(command: string): Promise<CommandResponse> {
   // TODO: Connect via RCON and issue commands
   await delay(150);
   const cleanCmd = command.trim().replace(/^\//, "");
@@ -330,7 +336,11 @@ export async function sendConsoleCommand(command: string): Promise<string> {
   const isOnline = backendUrl ? (lastFetchedStatus?.status === "ONLINE") : (serverState === "ONLINE");
 
   if (!isOnline) {
-    return "Error: Cannot execute command while server is offline.";
+    return {
+      status: "error",
+      command: cleanCmd,
+      response: "Error: Cannot execute command while server is offline."
+    };
   }
 
   const logEntry1 = { timestamp, level: "INFO" as const, message: `Console issued command: /${cleanCmd}` };
@@ -340,6 +350,9 @@ export async function sendConsoleCommand(command: string): Promise<string> {
   }
 
   let responseMessage = "";
+  let status = "ok";
+  let cmdValue = cleanCmd;
+
   if (backendUrl) {
     let base = backendUrl;
     if (!/^https?:\/\//i.test(base)) {
@@ -361,9 +374,12 @@ export async function sendConsoleCommand(command: string): Promise<string> {
       }
 
       const data = await res.json();
+      status = data.status || "ok";
+      cmdValue = data.command || cleanCmd;
       responseMessage = data.response || `Command executed successfully.`;
     } catch (e) {
       console.error("Error executing console command:", e);
+      status = "error";
       responseMessage = `Error executing command: ${(e as Error).message}`;
     }
   } else {
@@ -407,7 +423,11 @@ export async function sendConsoleCommand(command: string): Promise<string> {
   if (backendUrl) {
     lastFetchedLogs.push(logEntry2);
   }
-  return responseMessage;
+  return {
+    status,
+    command: cmdValue,
+    response: responseMessage,
+  };
 }
 
 /**

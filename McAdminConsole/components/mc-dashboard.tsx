@@ -23,6 +23,7 @@ import {
   Plugin,
   ServerProperty,
   formatUptime,
+  CommandResponse,
 } from "@/lib/mc-server";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -74,6 +75,7 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
   const [propertySearch, setPropertySearch] = useState("");
   const [playerSearch, setPlayerSearch] = useState("");
   const [activeTab, setActiveTab] = useState("console"); // Start on Console like the reference image
+  const [lastCommandResponse, setLastCommandResponse] = useState<CommandResponse | null>(null);
 
   // Loaders
   const [isPending, startTransition] = useTransition();
@@ -175,7 +177,8 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
     const cmd = commandInput;
     setCommandInput("");
     try {
-      await sendConsoleCommand(cmd);
+      const res = await sendConsoleCommand(cmd);
+      setLastCommandResponse(res);
       const updatedLogs = await getConsoleLogs();
       setLogs(updatedLogs);
       const updatedPlayers = await getServerPlayers();
@@ -606,6 +609,7 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
               setCommandInput={setCommandInput}
               handleSendCommand={handleSendCommand}
               consoleEndRef={consoleEndRef}
+              lastCommandResponse={lastCommandResponse}
             />
           )}
 
