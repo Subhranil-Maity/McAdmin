@@ -34,6 +34,8 @@ export interface Player {
   online: boolean;
   ping: number;
   isOp: boolean;
+  isWhitelisted: boolean;
+  isBanned: boolean;
 }
 
 export interface WhitelistEntry {
@@ -63,12 +65,12 @@ let serverState: ServerStatusState = "ONLINE";
 let startTime = Date.now();
 
 let mockPlayers: Player[] = [
-  { id: "1", username: "Notch", online: true, ping: 14, isOp: true },
-  { id: "2", username: "Jeb_", online: true, ping: 32, isOp: true },
-  { id: "3", username: "Alex", online: true, ping: 68, isOp: false },
-  { id: "4", username: "Steve", online: false, ping: 0, isOp: false },
-  { id: "5", username: "Herobrine", online: false, ping: 0, isOp: false },
-  { id: "6", username: "Grumm", online: false, ping: 0, isOp: false },
+  { id: "Notch", username: "Notch", online: true, ping: 14, isOp: true, isWhitelisted: true, isBanned: false },
+  { id: "Jeb_", username: "Jeb_", online: true, ping: 32, isOp: true, isWhitelisted: true, isBanned: false },
+  { id: "Alex", username: "Alex", online: true, ping: 68, isOp: false, isWhitelisted: true, isBanned: false },
+  { id: "Steve", username: "Steve", online: false, ping: 0, isOp: false, isWhitelisted: true, isBanned: false },
+  { id: "Herobrine", username: "Herobrine", online: false, ping: 0, isOp: false, isWhitelisted: false, isBanned: true },
+  { id: "Grumm", username: "Grumm", online: false, ping: 0, isOp: false, isWhitelisted: false, isBanned: false },
 ];
 
 let mockWhitelist: WhitelistEntry[] = [
@@ -434,13 +436,82 @@ export async function sendConsoleCommand(command: string): Promise<CommandRespon
  * Returns player directory lists sorted by online state.
  */
 export async function getServerPlayers(): Promise<Player[]> {
-  // TODO: Fetch online players via Query API, offline players from User Cache
-  await delay(100);
-  // Sort: online first, then username alphabetically
-  return [...mockPlayers].sort((a, b) => {
-    if (a.online === b.online) return a.username.localeCompare(b.username);
-    return a.online ? -1 : 1;
-  });
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+  if (!backendUrl) {
+    await delay(100);
+    return [...mockPlayers].sort((a, b) => {
+      if (a.online === b.online) return a.username.localeCompare(b.username);
+      return a.online ? -1 : 1;
+    });
+  }
+
+  let base = backendUrl;
+  if (!/^https?:\/\//i.test(base)) {
+    base = `http://${base}`;
+  }
+  base = base.replace(/\/+$/, "");
+
+  try {
+    const playersRes = await fetch(`${base}/api/server/players`, { cache: "no-store" });
+    if (!playersRes.ok) {
+      throw new Error(`Failed to fetch players: status ${playersRes.status}`);
+    }
+    const playersData = await playersRes.json();
+    const allPlayersList: any[] = playersData.players || [];
+
+    let onlineUsernames: string[] = [];
+    try {
+      const onlineRes = await fetch(`${base}/api/server/players/online`, { cache: "no-store" });
+      if (onlineRes.ok) {
+        const onlineData = await onlineRes.json();
+        if (Array.isArray(onlineData)) {
+          onlineUsernames = onlineData;
+        } else if (onlineData && Array.isArray(onlineData.players)) {
+          onlineUsernames = onlineData.players;
+        }
+      }
+    } catch (e) {
+      // Server offline/starting, online list empty
+    }
+
+    const allPlayersMap = new Map(allPlayersList.map((p) => [p.name.toLowerCase(), p]));
+
+    const mappedPlayers: Player[] = allPlayersList.map((p) => {
+      const isOnline = onlineUsernames.some((name) => name.toLowerCase() === p.name.toLowerCase());
+      return {
+        id: p.name,
+        username: p.name,
+        online: isOnline,
+        ping: isOnline ? 20 : 0,
+        isOp: p.op || false,
+        isWhitelisted: p.whitelisted || false,
+        isBanned: p.banned || false,
+      };
+    });
+
+    // Dynamically append online players who are not in the known offline cache database
+    onlineUsernames.forEach((name) => {
+      if (name && !allPlayersMap.has(name.toLowerCase())) {
+        mappedPlayers.push({
+          id: name,
+          username: name,
+          online: true,
+          ping: 20,
+          isOp: false,
+          isWhitelisted: false,
+          isBanned: false,
+        });
+      }
+    });
+
+    return mappedPlayers.sort((a, b) => {
+      if (a.online === b.online) return a.username.localeCompare(b.username);
+      return a.online ? -1 : 1;
+    });
+  } catch (err) {
+    console.error("Error fetching players from backend:", err);
+    return [];
+  }
 }
 
 /**
@@ -448,29 +519,90 @@ export async function getServerPlayers(): Promise<Player[]> {
  */
 export async function updatePlayerStatus(
   playerId: string,
-  action: "kick" | "ban" | "unban" | "toggle_op"
+  action: "kick" | "ban" | "unban" | "op" | "deop" | "whitelist" | "dewhitelist"
 ): Promise<void> {
-  // TODO: Translate actions to rcon commands (/kick, /ban, /op)
-  await delay(150);
-  const player = mockPlayers.find((p) => p.id === playerId);
-  if (!player) return;
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+  if (!backendUrl) {
+    await delay(150);
+    const player = mockPlayers.find((p) => p.id === playerId || p.username.toLowerCase() === playerId.toLowerCase());
+    if (!player) return;
+    const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
 
-  const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
+    if (action === "kick") {
+      player.online = false;
+      player.ping = 0;
+      mockLogs.push({ timestamp, level: "INFO", message: `Kicked ${player.username} from the server` });
+    } else if (action === "ban") {
+      player.online = false;
+      player.ping = 0;
+      player.isBanned = true;
+      mockLogs.push({ timestamp, level: "INFO", message: `Banned player ${player.username}` });
+    } else if (action === "unban") {
+      player.isBanned = false;
+      mockLogs.push({ timestamp, level: "INFO", message: `Unbanned player ${player.username}` });
+    } else if (action === "op") {
+      player.isOp = true;
+      mockLogs.push({ timestamp, level: "INFO", message: `Promoted ${player.username} to operator` });
+    } else if (action === "deop") {
+      player.isOp = false;
+      mockLogs.push({ timestamp, level: "INFO", message: `Demoted ${player.username} from operator` });
+    } else if (action === "whitelist") {
+      player.isWhitelisted = true;
+      if (!mockWhitelist.some((w) => w.username.toLowerCase() === player.username.toLowerCase())) {
+        mockWhitelist.push({ id: `w${Date.now()}`, username: player.username, addedAt: new Date().toISOString().slice(0, 16).replace("T", " ") });
+      }
+      mockLogs.push({ timestamp, level: "INFO", message: `Added ${player.username} to whitelist` });
+    } else if (action === "dewhitelist") {
+      player.isWhitelisted = false;
+      mockWhitelist = mockWhitelist.filter((w) => w.username.toLowerCase() !== player.username.toLowerCase());
+      mockLogs.push({ timestamp, level: "INFO", message: `Removed ${player.username} from whitelist` });
+    }
+    return;
+  }
 
-  if (action === "kick") {
-    mockPlayers = mockPlayers.map((p) => p.id === playerId ? { ...p, online: false, ping: 0 } : p);
-    mockLogs.push({ timestamp, level: "INFO", message: `Kicked ${player.username} from the server` });
-  } else if (action === "ban") {
-    mockPlayers = mockPlayers.map((p) => p.id === playerId ? { ...p, online: false, ping: 0 } : p);
-    mockLogs.push({ timestamp, level: "INFO", message: `Banned player ${player.username}` });
-  } else if (action === "toggle_op") {
-    const nextOpState = !player.isOp;
-    mockPlayers = mockPlayers.map((p) => p.id === playerId ? { ...p, isOp: nextOpState } : p);
-    mockLogs.push({
-      timestamp,
-      level: "INFO",
-      message: `${nextOpState ? "Promoted" : "Demoted"} ${player.username} ${nextOpState ? "to operator" : "from operator"}`
-    });
+  let base = backendUrl;
+  if (!/^https?:\/\//i.test(base)) {
+    base = `http://${base}`;
+  }
+  base = base.replace(/\/+$/, "");
+
+  let endpoint = "";
+  let body: any = { player: playerId };
+
+  switch (action) {
+    case "kick":
+      endpoint = `${base}/api/server/command`;
+      body = { command: `kick ${playerId}` };
+      break;
+    case "ban":
+      endpoint = `${base}/api/server/players/ban`;
+      body = { player: playerId, reason: "Banned by administrator" };
+      break;
+    case "unban":
+      endpoint = `${base}/api/server/players/unban`;
+      break;
+    case "op":
+      endpoint = `${base}/api/server/players/op`;
+      break;
+    case "deop":
+      endpoint = `${base}/api/server/players/deop`;
+      break;
+    case "whitelist":
+      endpoint = `${base}/api/server/players/whitelist`;
+      break;
+    case "dewhitelist":
+      endpoint = `${base}/api/server/players/dewhitelist`;
+      break;
+  }
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to perform player action ${action}: status ${res.status}`);
   }
 }
 
@@ -478,49 +610,117 @@ export async function updatePlayerStatus(
  * Returns active whitelist.
  */
 export async function getWhitelist(): Promise<WhitelistEntry[]> {
-  // TODO: Read whitelist.json from Minecraft root directory
-  await delay(100);
-  return [...mockWhitelist];
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+  if (!backendUrl) {
+    await delay(100);
+    return [...mockWhitelist];
+  }
+
+  try {
+    const players = await getServerPlayers();
+    return players
+      .filter((p) => p.isWhitelisted)
+      .map((p) => ({
+        id: p.username,
+        username: p.username,
+        addedAt: "Added"
+      }));
+  } catch (e) {
+    console.error("Error fetching whitelist:", e);
+    return [];
+  }
 }
 
 /**
  * Adds player to whitelist.
  */
 export async function addWhitelist(username: string): Promise<WhitelistEntry> {
-  // TODO: Issue '/whitelist add' command or edit whitelist.json
-  await delay(100);
-  const cleanUser = username.trim();
-  const exists = mockWhitelist.find((w) => w.username.toLowerCase() === cleanUser.toLowerCase());
-  
-  if (exists) {
-    return exists;
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+  if (!backendUrl) {
+    await delay(100);
+    const cleanUser = username.trim();
+    const exists = mockWhitelist.find((w) => w.username.toLowerCase() === cleanUser.toLowerCase());
+    
+    if (exists) {
+      return exists;
+    }
+
+    const newEntry: WhitelistEntry = {
+      id: cleanUser,
+      username: cleanUser,
+      addedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
+    };
+    mockWhitelist.push(newEntry);
+    
+    const player = mockPlayers.find((p) => p.username.toLowerCase() === cleanUser.toLowerCase());
+    if (player) {
+      player.isWhitelisted = true;
+    }
+
+    const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
+    mockLogs.push({ timestamp, level: "INFO", message: `Added ${cleanUser} to whitelist` });
+    
+    return newEntry;
   }
 
-  const newEntry: WhitelistEntry = {
-    id: `w${Date.now()}`,
-    username: cleanUser,
-    addedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
+  let base = backendUrl;
+  if (!/^https?:\/\//i.test(base)) {
+    base = `http://${base}`;
+  }
+  base = base.replace(/\/+$/, "");
+
+  const res = await fetch(`${base}/api/server/players/whitelist`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ player: username }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to add player to whitelist: status ${res.status}`);
+  }
+
+  return {
+    id: username,
+    username,
+    addedAt: new Date().toISOString().slice(0, 16).replace("T", " ")
   };
-  mockWhitelist.push(newEntry);
-  
-  const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
-  mockLogs.push({ timestamp, level: "INFO", message: `Added ${cleanUser} to whitelist` });
-  
-  return newEntry;
 }
 
 /**
  * Removes player from whitelist.
  */
 export async function removeWhitelist(entryId: string): Promise<void> {
-  // TODO: Issue '/whitelist remove' or edit whitelist.json
-  await delay(100);
-  const entry = mockWhitelist.find((w) => w.id === entryId);
-  if (!entry) return;
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+  if (!backendUrl) {
+    await delay(100);
+    const entry = mockWhitelist.find((w) => w.id === entryId || w.username.toLowerCase() === entryId.toLowerCase());
+    if (!entry) return;
 
-  mockWhitelist = mockWhitelist.filter((w) => w.id !== entryId);
-  const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
-  mockLogs.push({ timestamp, level: "INFO", message: `Removed ${entry.username} from whitelist` });
+    mockWhitelist = mockWhitelist.filter((w) => w.id !== entryId && w.username.toLowerCase() !== entryId.toLowerCase());
+    
+    const player = mockPlayers.find((p) => p.username.toLowerCase() === entry.username.toLowerCase());
+    if (player) {
+      player.isWhitelisted = false;
+    }
+
+    const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
+    mockLogs.push({ timestamp, level: "INFO", message: `Removed ${entry.username} from whitelist` });
+    return;
+  }
+
+  let base = backendUrl;
+  if (!/^https?:\/\//i.test(base)) {
+    base = `http://${base}`;
+  }
+  base = base.replace(/\/+$/, "");
+
+  const res = await fetch(`${base}/api/server/players/dewhitelist`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ player: entryId }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to remove player from whitelist: status ${res.status}`);
+  }
 }
 
 /**

@@ -192,6 +192,8 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
       setNewWhitelistName("");
       const updatedList = await getWhitelist();
       setWhitelist(updatedList);
+      const updatedPlayers = await getServerPlayers();
+      setPlayers(updatedPlayers);
       const updatedLogs = await getConsoleLogs();
       setLogs(updatedLogs);
     } catch (err) {
@@ -206,6 +208,8 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
       await removeWhitelist(id);
       const updatedList = await getWhitelist();
       setWhitelist(updatedList);
+      const updatedPlayers = await getServerPlayers();
+      setPlayers(updatedPlayers);
       const updatedLogs = await getConsoleLogs();
       setLogs(updatedLogs);
     } catch (err) {
@@ -228,16 +232,22 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
   // Properties tab is self-contained and manages its own fetching/saving
 
   // Player Actions Handler
-  const handlePlayerAction = async (playerId: string, action: "kick" | "ban" | "toggle_op") => {
+  const handlePlayerAction = async (
+    playerId: string,
+    action: "kick" | "ban" | "unban" | "op" | "deop" | "whitelist" | "dewhitelist"
+  ) => {
     setActionPlayerId(playerId);
     try {
       await updatePlayerStatus(playerId, action);
       const updatedPlayers = await getServerPlayers();
       setPlayers(updatedPlayers);
+      const updatedWhitelist = await getWhitelist();
+      setWhitelist(updatedWhitelist);
       const updatedLogs = await getConsoleLogs();
       setLogs(updatedLogs);
     } catch (err) {
       console.error(`Failed player action ${action}:`, err);
+      alert(`Action failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setActionPlayerId(null);
     }
