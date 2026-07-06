@@ -42,7 +42,7 @@ export default async function RootLayout({
     >
       <body className="min-h-full flex flex-col bg-zinc-950 text-zinc-50">
         <ClerkProvider appearance={{theme: shadcn}}>
-          <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-black">
+          <header className="h-16 flex items-center justify-between px-6 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-black shrink-0">
             <div className="flex items-center gap-6">
               <Link href="/" className="font-bold text-lg text-zinc-900 dark:text-zinc-50 hover:opacity-80 transition-opacity">
                 MC Admin
