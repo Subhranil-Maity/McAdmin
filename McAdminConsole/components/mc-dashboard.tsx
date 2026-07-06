@@ -12,8 +12,6 @@ import {
   removeWhitelist,
   getPlugins,
   togglePluginState,
-  getServerProperties,
-  updateServerProperty,
   toggleServerPower,
   updatePlayerStatus,
   ServerStatus,
@@ -21,7 +19,6 @@ import {
   Player,
   WhitelistEntry,
   Plugin,
-  ServerProperty,
   formatUptime,
   CommandResponse,
 } from "@/lib/mc-server";
@@ -67,12 +64,10 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
   const [players, setPlayers] = useState<Player[]>([]);
   const [whitelist, setWhitelist] = useState<WhitelistEntry[]>([]);
   const [plugins, setPlugins] = useState<Plugin[]>([]);
-  const [properties, setProperties] = useState<ServerProperty[]>([]);
 
   // Interactivity States
   const [commandInput, setCommandInput] = useState("");
   const [newWhitelistName, setNewWhitelistName] = useState("");
-  const [propertySearch, setPropertySearch] = useState("");
   const [playerSearch, setPlayerSearch] = useState("");
   const [activeTab, setActiveTab] = useState("console"); // Start on Console like the reference image
   const [lastCommandResponse, setLastCommandResponse] = useState<CommandResponse | null>(null);
@@ -89,13 +84,12 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
   useEffect(() => {
     async function loadData() {
       try {
-        const [stat, initialLogs, initialPlayers, initialWhitelist, initialPlugins, initialProps] = await Promise.all([
+        const [stat, initialLogs, initialPlayers, initialWhitelist, initialPlugins] = await Promise.all([
           getServerStatus(),
           getConsoleLogs(),
           getServerPlayers(),
           getWhitelist(),
           getPlugins(),
-          getServerProperties(),
         ]);
 
         setStatus(stat);
@@ -103,7 +97,6 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
         setPlayers(initialPlayers);
         setWhitelist(initialWhitelist);
         setPlugins(initialPlugins);
-        setProperties(initialProps);
       } catch (err) {
         console.error("Failed to load server data:", err);
       }
@@ -232,17 +225,7 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
     }
   };
 
-  // Property Handler
-  const handlePropertyChange = async (name: string, value: string) => {
-    setProperties((prev) => prev.map((p) => p.name === name ? { ...p, value } : p));
-    try {
-      await updateServerProperty(name, value);
-      const updatedLogs = await getConsoleLogs();
-      setLogs(updatedLogs);
-    } catch (err) {
-      console.error("Failed to update property:", err);
-    }
-  };
+  // Properties tab is self-contained and manages its own fetching/saving
 
   // Player Actions Handler
   const handlePlayerAction = async (playerId: string, action: "kick" | "ban" | "toggle_op") => {
@@ -641,14 +624,7 @@ export default function MCDashboard({ userRole, isDev }: MCDashboardProps) {
             />
           )}
 
-          {activeTab === "properties" && (
-            <PropertiesTab
-              properties={properties}
-              propertySearch={propertySearch}
-              setPropertySearch={setPropertySearch}
-              handlePropertyChange={handlePropertyChange}
-            />
-          )}
+          {activeTab === "properties" && <PropertiesTab />}
         </div>
 
       </main>
