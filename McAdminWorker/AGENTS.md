@@ -88,6 +88,10 @@ Rust/Axum service for managing a Minecraft server worker process.
 
 A standalone reference for all player-related endpoints is in `PLAYER_API.md`. Update it when adding or changing player endpoints.
 
+## File API reference
+
+A standalone reference for all file-related endpoints is in `FILES_API.md`. Update it when adding or changing file endpoints.
+
 ## Development
 
 - Use `cargo fmt`.

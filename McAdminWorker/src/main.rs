@@ -3,9 +3,10 @@ mod config;
 mod minecraft_files;
 
 use api::{
-    ban_player, deop_player, dewhitelist_player, get_all_players, get_config, get_online_players,
-    get_server_properties, health, list_config, op_player, send_server_command, server_status,
-    start_server, stop_server, unban_player, update_server_properties, whitelist_player,
+    ban_player, deop_player, dewhitelist_player, get_all_players, get_config, get_file_content,
+    get_online_players, get_server_properties, health, list_config, list_directory, op_player,
+    send_server_command, server_status, start_server, stop_server, unban_player,
+    update_server_properties, upload_file, whitelist_player, write_file,
 };
 use axum::{
     Router,
@@ -194,6 +195,13 @@ async fn main() {
         .route("/api/server/players/dewhitelist", post(dewhitelist_player))
         .route("/api/server/players/op", post(op_player))
         .route("/api/server/players/deop", post(deop_player))
+        .route("/api/files", get(list_directory))
+        .route("/api/files/content", get(get_file_content))
+        .route("/api/files/write", post(write_file))
+        .route(
+            "/api/files/upload",
+            post(upload_file).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024)),
+        )
         .route("/api/config", get(list_config))
         .route("/api/config/{key}", get(get_config))
         .layer(

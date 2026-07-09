@@ -1,3 +1,4 @@
+mod files;
 mod get_config;
 mod get_server_properties;
 mod health;
@@ -11,6 +12,7 @@ mod update_server_properties;
 
 use std::collections::BTreeMap;
 
+pub(crate) use files::{get_file_content, list_directory, upload_file, write_file};
 pub(crate) use get_config::get_config;
 pub(crate) use get_server_properties::get_server_properties;
 pub(crate) use health::health;
