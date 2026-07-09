@@ -10,6 +10,7 @@ import {
   UserCheck,
   Settings,
   FileText,
+  Folder,
   Server,
   ChevronDown,
   Play,
@@ -69,6 +70,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
       badge: plugins.length ? `${plugins.filter(p => p.enabled).length}/${plugins.length}` : null
     },
     { id: "properties", label: "Properties", icon: FileText, badge: null, path: "/dashboard/properties" },
+    { id: "files", label: "Files", icon: Folder, badge: null, path: "/dashboard/files" },
   ];
 
   const getTabIdFromPath = (path: string) => {
