@@ -2,6 +2,6 @@
 
 import OverviewTabWrapper from "@/components/dashboard/overview-tab-wrapper";
 
-export default function DashboardPage() {
+export default function DashboardOverviewPage() {
   return <OverviewTabWrapper />;
 }
