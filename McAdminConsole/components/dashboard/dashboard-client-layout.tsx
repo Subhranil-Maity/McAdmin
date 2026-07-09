@@ -106,6 +106,27 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
           {menuItems.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.path || (item.id === "overview" && pathname === "/dashboard");
+            const isPlugins = item.id === "plugins";
+
+            if (isPlugins) {
+              return (
+                <div
+                  key={item.id}
+                  title="Not Implemented Yet, manage directly"
+                  className="flex items-center justify-between w-full px-3 py-2 text-xs font-semibold rounded-xl text-zinc-600 dark:text-zinc-600 opacity-40 cursor-not-allowed select-none transition-all"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Icon className="w-4 h-4 text-zinc-700 dark:text-zinc-700" />
+                    <span>{item.label}</span>
+                  </div>
+                  {item.badge !== null && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border bg-zinc-900 border-zinc-950 text-zinc-700">
+                      {item.badge}
+                    </span>
+                  )}
+                </div>
+              );
+            }
 
             return (
               <Link
@@ -162,9 +183,6 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
           <div>
             <h2 className="text-lg font-black text-white flex items-center gap-2 capitalize">
               {activeTabId}
-              <span className="text-[10px] font-mono px-2 py-0.5 bg-zinc-900 border border-zinc-800 text-zinc-400 rounded-full font-bold">
-                {status?.version || "Spigot 1.20.4"}
-              </span>
             </h2>
             <p className="text-xs text-zinc-500">
               {status?.status === "ONLINE"
@@ -175,97 +193,74 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
             </p>
           </div>
 
-          {/* Quick Power Actions */}
-          <div className="flex items-center gap-2.5 w-full sm:w-auto">
-            {/* Start Button */}
-            <Button
-              onClick={() => handlePowerAction("start")}
-              disabled={!isServerOffline || powerActionLoading !== null}
-              className="flex-1 sm:flex-initial h-9 px-4 rounded-xl text-xs font-bold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 hover:border-emerald-500/40 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
-            >
-              {powerActionLoading === "start" ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Play className="w-3.5 h-3.5 fill-current mr-1.5" />
-              )}
-              Start
-            </Button>
+          {/* Telemetry Status, IP and Power Actions */}
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-end">
+            {/* Server Status pill */}
+            <div className="flex items-center gap-2 h-9 px-4 bg-zinc-900/50 border border-zinc-900 rounded-xl text-xs">
+              <span className={`w-1.5 h-1.5 rounded-full ${isServerOnline ? "bg-emerald-400 shadow-[0_0_6px_#10b981]" : isServerOffline ? "bg-rose-400 shadow-[0_0_6px_#f43f5e]" : "bg-amber-400 animate-pulse"}`} />
+              <span className="text-zinc-500 font-semibold font-mono uppercase tracking-wider text-[10px]">Status:</span>
+              <span className={`font-black uppercase text-[11px] ${isServerOnline ? "text-emerald-400" : isServerOffline ? "text-rose-400" : "text-amber-400"}`}>
+                {status?.status || "LOADING"}
+              </span>
+            </div>
 
-            {/* Stop Button */}
-            <Button
-              onClick={() => handlePowerAction("stop")}
-              disabled={isServerOffline || powerActionLoading !== null}
-              className="flex-1 sm:flex-initial h-9 px-4 rounded-xl text-xs font-bold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 hover:border-rose-500/40 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
-            >
-              {powerActionLoading === "stop" ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Square className="w-3.5 h-3.5 fill-current mr-1.5" />
-              )}
-              Stop
-            </Button>
+            {/* Server IP pill */}
+            <div className="flex items-center gap-2 h-9 px-4 bg-zinc-900/50 border border-zinc-900 rounded-xl text-xs text-zinc-300">
+              <span className="text-zinc-500 font-semibold font-mono uppercase tracking-wider text-[10px]">IP:</span>
+              <span className="font-extrabold font-mono text-[11px] text-indigo-400">
+                {status?.ipAddress ? `${status.ipAddress}:${status.port}` : "—"}
+              </span>
+            </div>
 
-            {/* Restart Button */}
-            <Button
-              onClick={() => handlePowerAction("restart")}
-              disabled={isServerOffline || powerActionLoading !== null}
-              className="flex-1 sm:flex-initial h-9 px-4 rounded-xl text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 hover:border-amber-500/40 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
-            >
-              {powerActionLoading === "restart" ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <RotateCw className="w-3.5 h-3.5 mr-1.5" />
-              )}
-              Restart
-            </Button>
+            {/* Divider line */}
+            <div className="h-6 w-[1px] bg-zinc-900 hidden md:block" />
+
+            {/* Quick Power Actions */}
+            <div className="flex items-center gap-2">
+              {/* Start Button */}
+              <Button
+                onClick={() => handlePowerAction("start")}
+                disabled={!isServerOffline || powerActionLoading !== null}
+                className="h-9 px-4 rounded-xl text-xs font-bold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 hover:border-emerald-500/40 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
+              >
+                {powerActionLoading === "start" ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Play className="w-3.5 h-3.5 fill-current mr-1.5" />
+                )}
+                Start
+              </Button>
+
+              {/* Stop Button */}
+              <Button
+                onClick={() => handlePowerAction("stop")}
+                disabled={isServerOffline || powerActionLoading !== null}
+                className="h-9 px-4 rounded-xl text-xs font-bold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 hover:border-rose-500/40 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
+              >
+                {powerActionLoading === "stop" ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Square className="w-3.5 h-3.5 fill-current mr-1.5" />
+                )}
+                Stop
+              </Button>
+
+              {/* Restart Button */}
+              <Button
+                onClick={() => handlePowerAction("restart")}
+                disabled={isServerOffline || powerActionLoading !== null}
+                className="h-9 px-4 rounded-xl text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 hover:border-amber-500/40 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
+              >
+                {powerActionLoading === "restart" ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <RotateCw className="w-3.5 h-3.5 mr-1.5" />
+                )}
+                Restart
+              </Button>
+            </div>
           </div>
         </header>
-
-        {/* Global Server Metrics Row */}
-        <section className="px-6 py-4 bg-zinc-950/40 border-b border-zinc-900 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 shrink-0">
-          <div className="bg-zinc-900/30 border border-zinc-900 rounded-xl p-3 flex flex-col justify-center">
-            <span className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider font-mono">Name</span>
-            <span className="text-xs font-extrabold text-zinc-200 mt-0.5 truncate">Minecraft Test Server</span>
-          </div>
-
-          <div className="bg-zinc-900/30 border border-zinc-900 rounded-xl p-3 flex flex-col justify-center">
-            <span className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider font-mono">Status</span>
-            <span className={`text-xs font-extrabold mt-0.5 flex items-center gap-1.5 ${
-              isServerOnline ? "text-emerald-400" : isServerOffline ? "text-rose-400" : "text-amber-400 animate-pulse"
-            }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${isServerOnline ? "bg-emerald-400 shadow-[0_0_6px_#10b981]" : isServerOffline ? "bg-rose-400 shadow-[0_0_6px_#f43f5e]" : "bg-amber-400"}`} />
-              {status?.status || "LOADING"}
-            </span>
-          </div>
-
-          <div className="bg-zinc-900/30 border border-zinc-900 rounded-xl p-3 flex flex-col justify-center">
-            <span className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider font-mono">Address</span>
-            <span className="text-xs font-extrabold text-zinc-200 mt-0.5 truncate">
-              {status?.ipAddress ? `${status.ipAddress}:${status.port}` : "—"}
-            </span>
-          </div>
-
-          <div className="bg-zinc-900/30 border border-zinc-900 rounded-xl p-3 flex flex-col justify-center">
-            <span className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider font-mono">CPU</span>
-            <span className="text-xs font-extrabold text-zinc-200 mt-0.5">
-              {isServerOffline ? "Offline" : `${status?.cpu || 0}%`}
-            </span>
-          </div>
-
-          <div className="bg-zinc-900/30 border border-zinc-900 rounded-xl p-3 flex flex-col justify-center">
-            <span className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider font-mono">Memory</span>
-            <span className="text-xs font-extrabold text-zinc-200 mt-0.5">
-              {isServerOffline ? "Offline" : `${status?.ramUsed || 0} GB / ${status?.ramMax || 8} GB`}
-            </span>
-          </div>
-
-          <div className="bg-zinc-900/30 border border-zinc-900 rounded-xl p-3 flex flex-col justify-center">
-            <span className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider font-mono">Disk</span>
-            <span className="text-xs font-extrabold text-zinc-200 mt-0.5">
-              {isServerOffline ? "Unavailable" : "2.34 GB / 25 GB"}
-            </span>
-          </div>
-        </section>
 
         {/* Scrollable Active Tab Workspace */}
         <div className="flex-1 overflow-y-auto p-6 scrollbar-thin scrollbar-thumb-zinc-900">

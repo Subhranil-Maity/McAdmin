@@ -82,7 +82,6 @@ export default function OverviewTab({ status, userRole }: OverviewTabProps) {
             <div className="grid grid-cols-2 gap-4 text-xs font-mono text-zinc-400 pt-2">
               <div>IP Address: <span className="text-zinc-200">{status?.ipAddress}</span></div>
               <div>Server Port: <span className="text-zinc-200">{status?.port}</span></div>
-              <div>Engine: <span className="text-zinc-200">{status?.version}</span></div>
               <div>Uptime: <span className="text-zinc-200">{status ? formatUptime(status.uptime) : "—"}</span></div>
             </div>
           </div>
