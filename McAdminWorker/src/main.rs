@@ -28,7 +28,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex as TokioMutex;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, sleep, timeout};
+
+const RCON_TIMEOUT: Duration = Duration::from_secs(5);
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
@@ -88,18 +90,22 @@ impl RconManager {
         let mut client = self.client.lock().await;
 
         if client.is_none() {
-            *client = Some(
-                RconClient::connect(self.config.clone())
-                    .await
-                    .map_err(|error| error.to_string())?,
-            );
+            let connected = timeout(RCON_TIMEOUT, RconClient::connect(self.config.clone()))
+                .await
+                .map_err(|_| "RCON connection timed out".to_string())?
+                .map_err(|error| error.to_string())?;
+            *client = Some(connected);
         }
 
-        let result = client
-            .as_mut()
-            .expect("RCON client must be initialized")
-            .execute(command)
-            .await;
+        let result = timeout(
+            RCON_TIMEOUT,
+            client
+                .as_mut()
+                .expect("RCON client must be initialized")
+                .execute(command),
+        )
+        .await
+        .map_err(|_| "RCON command timed out".to_string())?;
 
         match result {
             Ok(response) => Ok(response),
