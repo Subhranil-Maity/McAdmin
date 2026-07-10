@@ -1,5 +1,5 @@
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::path::Path;
 use tokio::fs;
 use tracing::warn;
@@ -70,10 +70,7 @@ pub(crate) async fn read_ops(server_dir: &Path) -> Vec<OpEntry> {
     read_array(&server_dir.join(OPS_FILE)).await
 }
 
-pub(crate) async fn write_ops(
-    server_dir: &Path,
-    data: &[OpEntry],
-) -> Result<(), std::io::Error> {
+pub(crate) async fn write_ops(server_dir: &Path, data: &[OpEntry]) -> Result<(), std::io::Error> {
     write_array(&server_dir.join(OPS_FILE), data).await
 }
 
@@ -101,5 +98,8 @@ pub(crate) async fn write_banned_players(
 
 pub(crate) async fn find_uuid_in_cache(server_dir: &Path, name: &str) -> Option<String> {
     let cache = read_usercache(server_dir).await;
-    cache.iter().find(|e| e.name.eq_ignore_ascii_case(name)).map(|e| e.uuid.clone())
+    cache
+        .iter()
+        .find(|e| e.name.eq_ignore_ascii_case(name))
+        .map(|e| e.uuid.clone())
 }

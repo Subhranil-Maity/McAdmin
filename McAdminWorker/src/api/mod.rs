@@ -18,8 +18,8 @@ pub(crate) use get_server_properties::get_server_properties;
 pub(crate) use health::health;
 pub(crate) use list_config::list_config;
 pub(crate) use players::{
-    ban_player, deop_player, dewhitelist_player, get_all_players, get_online_players,
-    op_player, unban_player, whitelist_player,
+    ban_player, deop_player, dewhitelist_player, get_all_players, get_online_players, op_player,
+    unban_player, whitelist_player,
 };
 pub(crate) use send_server_command::send_server_command;
 pub(crate) use server_status::server_status;

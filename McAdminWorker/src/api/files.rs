@@ -191,7 +191,10 @@ pub(crate) async fn list_directory(
         entries.push(DirEntryInfo {
             name,
             size: entry_meta.len(),
-            modified: entry_meta.modified().map(format_timestamp).unwrap_or_default(),
+            modified: entry_meta
+                .modified()
+                .map(format_timestamp)
+                .unwrap_or_default(),
             entry_type: entry_type.to_string(),
         });
     }
@@ -341,7 +344,10 @@ pub(crate) async fn upload_file(
 async fn write_file_inner(base: &Path, destination: &Path, data: &[u8]) -> Result<(), StatusCode> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).await.map_err(|e| {
-            error!("failed to create parent directories for {}: {e}", destination.display());
+            error!(
+                "failed to create parent directories for {}: {e}",
+                destination.display()
+            );
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }

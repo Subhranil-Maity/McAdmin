@@ -26,8 +26,6 @@ pub(crate) struct PlayerInfo {
     banned: bool,
 }
 
-
-
 #[derive(Serialize)]
 pub(crate) struct PlayerActionResponse {
     status: String,
@@ -151,15 +149,18 @@ pub(crate) async fn ban_player(
                 created,
                 source: "Server".into(),
                 expires: "forever".into(),
-                reason: body.reason.map(|r| r.trim().to_string()).filter(|r| !r.is_empty()),
+                reason: body
+                    .reason
+                    .map(|r| r.trim().to_string())
+                    .filter(|r| !r.is_empty()),
             });
 
-            minecraft_files::write_banned_players(&state.server_dir, &banned).await.map_err(
-                |e| {
+            minecraft_files::write_banned_players(&state.server_dir, &banned)
+                .await
+                .map_err(|e| {
                     tracing::error!("failed to write banned-players.json: {e}");
                     StatusCode::INTERNAL_SERVER_ERROR
-                },
-            )?;
+                })?;
 
             Ok(Json(PlayerActionResponse {
                 status: "ok".into(),
@@ -187,10 +188,14 @@ pub(crate) async fn unban_player(
     match runtime_state {
         MinecraftServerState::Starting => Err(StatusCode::CONFLICT),
         MinecraftServerState::Online => {
-            state.rcon.execute(&format!("pardon {player}")).await.map_err(|e| {
-                tracing::error!("RCON pardon failed: {e}");
-                StatusCode::BAD_GATEWAY
-            })?;
+            state
+                .rcon
+                .execute(&format!("pardon {player}"))
+                .await
+                .map_err(|e| {
+                    tracing::error!("RCON pardon failed: {e}");
+                    StatusCode::BAD_GATEWAY
+                })?;
 
             Ok(Json(PlayerActionResponse {
                 status: "ok".into(),
@@ -201,7 +206,9 @@ pub(crate) async fn unban_player(
         MinecraftServerState::Offline => {
             let mut banned = minecraft_files::read_banned_players(&state.server_dir).await;
 
-            let pos = banned.iter().position(|e| e.name.eq_ignore_ascii_case(&player));
+            let pos = banned
+                .iter()
+                .position(|e| e.name.eq_ignore_ascii_case(&player));
 
             match pos {
                 Some(idx) => {
@@ -269,7 +276,10 @@ pub(crate) async fn whitelist_player(
 
             let mut whitelist = minecraft_files::read_whitelist_json(&state.server_dir).await;
 
-            if whitelist.iter().any(|e| e.name.eq_ignore_ascii_case(&player)) {
+            if whitelist
+                .iter()
+                .any(|e| e.name.eq_ignore_ascii_case(&player))
+            {
                 return Ok(Json(PlayerActionResponse {
                     status: "ok".into(),
                     method: "file".into(),
@@ -282,12 +292,12 @@ pub(crate) async fn whitelist_player(
                 name: player.clone(),
             });
 
-            minecraft_files::write_whitelist_json(&state.server_dir, &whitelist).await.map_err(
-                |e| {
+            minecraft_files::write_whitelist_json(&state.server_dir, &whitelist)
+                .await
+                .map_err(|e| {
                     tracing::error!("failed to write whitelist.json: {e}");
                     StatusCode::INTERNAL_SERVER_ERROR
-                },
-            )?;
+                })?;
 
             Ok(Json(PlayerActionResponse {
                 status: "ok".into(),
@@ -333,7 +343,9 @@ pub(crate) async fn dewhitelist_player(
         MinecraftServerState::Offline => {
             let mut whitelist = minecraft_files::read_whitelist_json(&state.server_dir).await;
 
-            let pos = whitelist.iter().position(|e| e.name.eq_ignore_ascii_case(&player));
+            let pos = whitelist
+                .iter()
+                .position(|e| e.name.eq_ignore_ascii_case(&player));
 
             match pos {
                 Some(idx) => {
@@ -374,10 +386,14 @@ pub(crate) async fn op_player(
     match runtime_state {
         MinecraftServerState::Starting => Err(StatusCode::CONFLICT),
         MinecraftServerState::Online => {
-            state.rcon.execute(&format!("op {player}")).await.map_err(|e| {
-                tracing::error!("RCON op failed: {e}");
-                StatusCode::BAD_GATEWAY
-            })?;
+            state
+                .rcon
+                .execute(&format!("op {player}"))
+                .await
+                .map_err(|e| {
+                    tracing::error!("RCON op failed: {e}");
+                    StatusCode::BAD_GATEWAY
+                })?;
 
             Ok(Json(PlayerActionResponse {
                 status: "ok".into(),
@@ -412,10 +428,12 @@ pub(crate) async fn op_player(
                 bypasses_player_limit: false,
             });
 
-            minecraft_files::write_ops(&state.server_dir, &ops).await.map_err(|e| {
-                tracing::error!("failed to write ops.json: {e}");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+            minecraft_files::write_ops(&state.server_dir, &ops)
+                .await
+                .map_err(|e| {
+                    tracing::error!("failed to write ops.json: {e}");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
 
             Ok(Json(PlayerActionResponse {
                 status: "ok".into(),
@@ -443,10 +461,14 @@ pub(crate) async fn deop_player(
     match runtime_state {
         MinecraftServerState::Starting => Err(StatusCode::CONFLICT),
         MinecraftServerState::Online => {
-            state.rcon.execute(&format!("deop {player}")).await.map_err(|e| {
-                tracing::error!("RCON deop failed: {e}");
-                StatusCode::BAD_GATEWAY
-            })?;
+            state
+                .rcon
+                .execute(&format!("deop {player}"))
+                .await
+                .map_err(|e| {
+                    tracing::error!("RCON deop failed: {e}");
+                    StatusCode::BAD_GATEWAY
+                })?;
 
             Ok(Json(PlayerActionResponse {
                 status: "ok".into(),
@@ -457,15 +479,19 @@ pub(crate) async fn deop_player(
         MinecraftServerState::Offline => {
             let mut ops = minecraft_files::read_ops(&state.server_dir).await;
 
-            let pos = ops.iter().position(|e| e.name.eq_ignore_ascii_case(&player));
+            let pos = ops
+                .iter()
+                .position(|e| e.name.eq_ignore_ascii_case(&player));
 
             match pos {
                 Some(idx) => {
                     ops.remove(idx);
-                    minecraft_files::write_ops(&state.server_dir, &ops).await.map_err(|e| {
-                        tracing::error!("failed to write ops.json: {e}");
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    })?;
+                    minecraft_files::write_ops(&state.server_dir, &ops)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!("failed to write ops.json: {e}");
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        })?;
 
                     Ok(Json(PlayerActionResponse {
                         status: "ok".into(),

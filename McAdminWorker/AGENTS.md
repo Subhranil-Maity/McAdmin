@@ -7,6 +7,7 @@ Rust/Axum service for managing a Minecraft server worker process.
 - Loads `.env` at startup with `dotenvy`.
 - Requires `ADMIN_WORKER_HOST`, `ADMIN_WORKER_PORT`, and `HOME_DIR`.
 - Requires `RCON_HOST`, `RCON_PORT`, and `RCON_PASSWORD` for RCON command forwarding.
+- Requires `CLERK_SECRET_KEY` for Clerk authentication.
 - Binds the HTTP server from `ADMIN_WORKER_HOST:ADMIN_WORKER_PORT`.
 - Uses `HOME_DIR` as the Minecraft server directory.
 - Reads config from `HOME_DIR/admin_worker_config.json`.
@@ -26,9 +27,9 @@ Rust/Axum service for managing a Minecraft server worker process.
 ## HTTP API
 
 - `GET /`
-  - Health response for the worker.
+  - Health response for the worker. **Public (no auth).**
 - `GET /api/status`
-  - Returns worker/server runtime status and system metrics.
+  - Returns worker/server runtime status and system metrics. **Public (no auth).**
 - `POST /api/server/start`
   - Starts the Minecraft server process.
 - `POST /api/server/stop`
@@ -60,6 +61,16 @@ Rust/Axum service for managing a Minecraft server worker process.
 - `GET /api/config/{key}`
   - Reads one persisted config entry.
 
+## Auth
+
+- All routes except `GET /` and `GET /api/status` require Clerk authentication.
+- Accepts `Authorization: Bearer <token>` header or `__session` cookie.
+- JWT is verified against Clerk's JWKS (RS256).
+- After JWT validation, the user is fetched from Clerk Backend API (`GET /users/{user_id}`).
+- `public_metadata.role` must be `"admin"` or `"owner"` (case-insensitive).
+- User roles are cached in-memory for 60 minutes to avoid repeated API calls.
+- Logs: `auth OK`, `role cache hit` (with remaining TTL), `role cache miss`, `auth rejected` (with reason).
+
 ## Server lifecycle
 
 - The runtime tracks Minecraft state in memory.
@@ -74,8 +85,12 @@ Rust/Axum service for managing a Minecraft server worker process.
 ## Dependencies
 
 - `axum`
+- `axum-extra` with `cookie`
 - `chrono`
+- `clerk-rs` with `axum`
 - `tokio` with `full`
+- `tower`
+- `futures-util`
 - `serde`
 - `serde_json`
 - `dotenvy`

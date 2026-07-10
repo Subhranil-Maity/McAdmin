@@ -1,4 +1,5 @@
 mod api;
+mod auth;
 mod config;
 mod minecraft_files;
 
@@ -8,9 +9,10 @@ use api::{
     send_server_command, server_status, start_server, stop_server, unban_player,
     update_server_properties, upload_file, whitelist_player, write_file,
 };
+use auth::ClerkAuthLayer;
 use axum::{
     Router,
-    http::{HeaderValue, Method, request::Parts},
+    http::{HeaderName, HeaderValue, Method, request::Parts},
     routing::{get, post},
 };
 use circular_queue::CircularQueue;
@@ -28,7 +30,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::{Duration, sleep};
 use tower_http::{
-    cors::{AllowOrigin, Any, CorsLayer},
+    cors::{AllowOrigin, CorsLayer},
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
 use tracing::{Level, error, info};
@@ -158,6 +160,8 @@ async fn main() {
     .auto_reconnect(true)
     .max_reconnect_attempts(3);
 
+    let clerk_secret_key = env::var("CLERK_SECRET_KEY").expect("CLERK_SECRET_KEY must be set");
+
     let state = AppState {
         system: Arc::new(TokioMutex::new(System::new_all())),
         config: Arc::new(
@@ -209,6 +213,7 @@ async fn main() {
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
+        .layer(ClerkAuthLayer::new(clerk_secret_key))
         .layer(cors_layer())
         .with_state(state);
 
@@ -229,7 +234,11 @@ fn cors_layer() -> CorsLayer {
             |origin: &HeaderValue, _request_parts: &Parts| is_local_origin(origin),
         ))
         .allow_methods([Method::GET, Method::POST])
-        .allow_headers(Any)
+        .allow_headers([
+            HeaderName::from_static("authorization"),
+            HeaderName::from_static("content-type"),
+        ])
+        .allow_credentials(true)
 }
 
 fn is_local_origin(origin: &HeaderValue) -> bool {
