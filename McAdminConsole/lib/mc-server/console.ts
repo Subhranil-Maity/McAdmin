@@ -29,7 +29,7 @@ export async function getConsoleLogs(): Promise<ConsoleLog[]> {
   if (logsCache.list.length === 0) {
     try {
       const endpoint = getBackendStatusUrl();
-      const res = await fetch(endpoint, { cache: "no-store" });
+      const res = await fetch(endpoint, { cache: "no-store", credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.recent_logs)) {
@@ -85,6 +85,7 @@ export async function sendConsoleCommand(command: string): Promise<CommandRespon
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ command: cleanCmd }),
+      credentials: "include",
     });
 
     if (!res.ok) {

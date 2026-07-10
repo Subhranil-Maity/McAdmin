@@ -32,7 +32,7 @@ export default function PropertiesTab() {
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      const res = await fetch(`${getBackendUrl()}/api/server/properties`);
+      const res = await fetch(`${getBackendUrl()}/api/server/properties`, { credentials: "include" });
       if (!res.ok) {
         throw new Error(`Server returned status: ${res.status}`);
       }
@@ -80,6 +80,7 @@ export default function PropertiesTab() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(editedProperties),
+        credentials: "include",
       });
 
       if (!res.ok) {

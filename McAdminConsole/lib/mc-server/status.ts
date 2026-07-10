@@ -37,7 +37,7 @@ export async function getServerStatus(): Promise<ServerStatus> {
 
   const endpoint = getBackendStatusUrl();
   try {
-    const res = await fetch(endpoint, { cache: "no-store" });
+    const res = await fetch(endpoint, { cache: "no-store", credentials: "include" });
     if (!res.ok) {
       throw new Error(`HTTP error! status: ${res.status}`);
     }
@@ -124,22 +124,22 @@ export async function toggleServerPower(action: "start" | "stop" | "restart"): P
   base = base.replace(/\/+$/, "");
 
   if (action === "start") {
-    const res = await fetch(`${base}/api/server/start`, { method: "POST" });
+    const res = await fetch(`${base}/api/server/start`, { method: "POST", credentials: "include" });
     if (!res.ok) {
       throw new Error(`Failed to start server: status ${res.status}`);
     }
   } else if (action === "stop") {
-    const res = await fetch(`${base}/api/server/stop`, { method: "POST" });
+    const res = await fetch(`${base}/api/server/stop`, { method: "POST", credentials: "include" });
     if (!res.ok) {
       throw new Error(`Failed to stop server: status ${res.status}`);
     }
   } else if (action === "restart") {
-    const resStop = await fetch(`${base}/api/server/stop`, { method: "POST" });
+    const resStop = await fetch(`${base}/api/server/stop`, { method: "POST", credentials: "include" });
     if (!resStop.ok) {
       throw new Error(`Failed to stop server during restart: status ${resStop.status}`);
     }
     await delay(2000);
-    const resStart = await fetch(`${base}/api/server/start`, { method: "POST" });
+    const resStart = await fetch(`${base}/api/server/start`, { method: "POST", credentials: "include" });
     if (!resStart.ok) {
       throw new Error(`Failed to start server during restart: status ${resStart.status}`);
     }

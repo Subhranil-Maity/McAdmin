@@ -53,6 +53,7 @@ export async function addWhitelist(username: string): Promise<WhitelistEntry> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ player: username }),
+    credentials: "include",
   });
   if (!res.ok) {
     throw new Error(`Failed to add player to whitelist: status ${res.status}`);
@@ -82,6 +83,7 @@ export async function removeWhitelist(entryId: string): Promise<void> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ player: entryId }),
+    credentials: "include",
   });
   if (!res.ok) {
     throw new Error(`Failed to remove player from whitelist: status ${res.status}`);

@@ -73,7 +73,7 @@ export async function listServerFiles(path: string = "/"): Promise<FileListRespo
   }
   base = base.replace(/\/+$/, "");
 
-  const res = await fetch(`${base}/api/files?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+  const res = await fetch(`${base}/api/files?path=${encodeURIComponent(path)}`, { cache: "no-store", credentials: "include" });
   if (!res.ok) {
     throw new Error(`Failed to list files: status ${res.status}`);
   }
@@ -122,7 +122,7 @@ export async function getServerFileContent(path: string): Promise<FileContentRes
   }
   base = base.replace(/\/+$/, "");
 
-  const res = await fetch(`${base}/api/files/content?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+  const res = await fetch(`${base}/api/files/content?path=${encodeURIComponent(path)}`, { cache: "no-store", credentials: "include" });
   if (!res.ok) {
     if (res.status === 413) {
       throw new Error("File exceeds 5MB limit.");
@@ -156,7 +156,8 @@ export async function writeServerFileContent(
   const res = await fetch(`${base}/api/files/write`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, content, force })
+    body: JSON.stringify({ path, content, force }),
+    credentials: "include",
   });
 
   if (!res.ok) {
@@ -194,6 +195,7 @@ export async function uploadServerFile(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${base}/api/files/upload`);
+    xhr.withCredentials = true;
 
     if (onProgress && xhr.upload) {
       xhr.upload.addEventListener("progress", (event) => {

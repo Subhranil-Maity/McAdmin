@@ -27,7 +27,7 @@ export async function getServerPlayers(): Promise<Player[]> {
   base = base.replace(/\/+$/, "");
 
   try {
-    const playersRes = await fetch(`${base}/api/server/players`, { cache: "no-store" });
+    const playersRes = await fetch(`${base}/api/server/players`, { cache: "no-store", credentials: "include" });
     if (!playersRes.ok) {
       throw new Error(`Failed to fetch players: status ${playersRes.status}`);
     }
@@ -36,7 +36,7 @@ export async function getServerPlayers(): Promise<Player[]> {
 
     let onlineUsernames: string[] = [];
     try {
-      const onlineRes = await fetch(`${base}/api/server/players/online`, { cache: "no-store" });
+      const onlineRes = await fetch(`${base}/api/server/players/online`, { cache: "no-store", credentials: "include" });
       if (onlineRes.ok) {
         const onlineData = await onlineRes.json();
         if (Array.isArray(onlineData)) {
@@ -138,6 +138,7 @@ export async function updatePlayerStatus(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    credentials: "include",
   });
 
   if (!res.ok) {
