@@ -25,6 +25,7 @@ import {
 interface DashboardContextType {
   userRole: UserRole;
   isDev: boolean;
+  isPhysicalServerOnline: boolean;
 
   // Server Data States
   status: ServerStatus | null;
@@ -77,6 +78,8 @@ export function DashboardProvider({
 }) {
   // Server Data States
   const [status, setStatus] = useState<ServerStatus | null>(null);
+  const [isPhysicalServerOnline, setIsPhysicalServerOnline] = useState(true);
+  const consecutiveFailuresRef = useRef(0);
   const [logs, setLogs] = useState<ConsoleLog[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
   const [whitelist, setWhitelist] = useState<WhitelistEntry[]>([]);
@@ -113,8 +116,18 @@ export function DashboardProvider({
         setPlayers(initialPlayers);
         setWhitelist(initialWhitelist);
         setPlugins(initialPlugins);
+
+        if (stat.isReachable === false) {
+          consecutiveFailuresRef.current = 3;
+          setIsPhysicalServerOnline(false);
+        } else {
+          consecutiveFailuresRef.current = 0;
+          setIsPhysicalServerOnline(true);
+        }
       } catch (err) {
         console.error("Failed to load server data:", err);
+        consecutiveFailuresRef.current = 3;
+        setIsPhysicalServerOnline(false);
       }
     }
     loadData();
@@ -126,11 +139,25 @@ export function DashboardProvider({
       try {
         const latestStatus = await getServerStatus();
         setStatus(latestStatus);
+
+        if (latestStatus.isReachable === false) {
+          consecutiveFailuresRef.current += 1;
+          if (consecutiveFailuresRef.current >= 3) {
+            setIsPhysicalServerOnline(false);
+          }
+        } else {
+          consecutiveFailuresRef.current = 0;
+          setIsPhysicalServerOnline(true);
+        }
         
         const latestLogs = await getConsoleLogs();
         setLogs(latestLogs);
       } catch (err) {
         console.error("Polling error:", err);
+        consecutiveFailuresRef.current += 1;
+        if (consecutiveFailuresRef.current >= 3) {
+          setIsPhysicalServerOnline(false);
+        }
       }
     }, 2500);
 
@@ -162,6 +189,17 @@ export function DashboardProvider({
       // Post-transition reload
       const updatedStatus = await getServerStatus();
       setStatus(updatedStatus);
+
+      if (updatedStatus.isReachable === false) {
+        consecutiveFailuresRef.current += 1;
+        if (consecutiveFailuresRef.current >= 3) {
+          setIsPhysicalServerOnline(false);
+        }
+      } else {
+        consecutiveFailuresRef.current = 0;
+        setIsPhysicalServerOnline(true);
+      }
+
       const updatedLogs = await getConsoleLogs();
       setLogs(updatedLogs);
       const updatedPlayers = await getServerPlayers();
@@ -268,6 +306,7 @@ export function DashboardProvider({
         userRole,
         isDev,
         status,
+        isPhysicalServerOnline,
         logs,
         players,
         whitelist,

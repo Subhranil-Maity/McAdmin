@@ -1,6 +1,6 @@
 import { currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import { getUserRole } from "@/types/roles";
+import { getUserRole, UserRole } from "@/types/roles";
 import { DashboardProvider } from "@/components/dashboard/dashboard-context";
 import DashboardClientLayout from "@/components/dashboard/dashboard-client-layout";
 
@@ -16,6 +16,10 @@ export default async function DashboardLayout({
   }
 
   const role = getUserRole(user.publicMetadata);
+  if (role === UserRole.NORMUSER) {
+    redirect("/serverstatus");
+  }
+  
   const isDev = process.env.NODE_ENV === "development";
 
   return (

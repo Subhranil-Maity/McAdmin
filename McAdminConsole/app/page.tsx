@@ -36,11 +36,11 @@ export default async function Home() {
           {user ? (
             <>
               <Link
-                href="/dashboard"
+                href={role === UserRole.NORMUSER ? "/serverstatus" : "/dashboard"}
                 className="w-full sm:w-auto flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl text-sm font-semibold bg-white text-black hover:bg-zinc-200 active:scale-[0.98] transition-all duration-200"
               >
                 <LayoutDashboard className="w-4 h-4" />
-                Go to Dashboard
+                {role === UserRole.NORMUSER ? "Go to Server Status" : "Go to Dashboard"}
               </Link>
               {(role === UserRole.OWNER || process.env.NODE_ENV === "development") && (
                 <Link

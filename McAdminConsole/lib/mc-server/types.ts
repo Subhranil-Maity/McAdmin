@@ -11,6 +11,7 @@ export interface ServerStatus {
   port: number;
   activePlayers?: number;
   maxPlayers?: number;
+  isReachable?: boolean;
 }
 
 export interface ConsoleLog {

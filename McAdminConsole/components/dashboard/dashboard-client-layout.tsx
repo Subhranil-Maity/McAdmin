@@ -29,6 +29,7 @@ interface DashboardClientLayoutProps {
 export default function DashboardClientLayout({ children }: DashboardClientLayoutProps) {
   const {
     status,
+    isPhysicalServerOnline,
     players,
     whitelist,
     plugins,
@@ -269,6 +270,33 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
           {children}
         </div>
       </main>
+
+      {/* Reconnection Loading Overlay */}
+      {!isPhysicalServerOnline && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md animate-fade-in select-none">
+          <div className="max-w-sm w-full mx-4 rounded-2xl border border-zinc-850 bg-zinc-900/90 shadow-2xl p-6 text-center space-y-6 relative overflow-hidden">
+            {/* Top red/amber bar */}
+            <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-rose-500 to-amber-500" />
+            
+            <div className="flex flex-col items-center space-y-3">
+              <div className="w-12 h-12 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+                <Loader2 className="w-6 h-6 animate-spin text-indigo-400" />
+              </div>
+              <h3 className="font-extrabold text-white text-lg">Physical Server Offline</h3>
+              <p className="text-xs text-zinc-400 leading-relaxed max-w-[280px]">
+                The hardware node is currently unreachable. We are attempting to establish a connection.
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-900 space-y-1">
+              <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-mono font-bold">Connection Attempts</div>
+              <div className="text-[10px] font-mono text-zinc-400">
+                Status: <span className="text-amber-400 font-bold animate-pulse">Retrying...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

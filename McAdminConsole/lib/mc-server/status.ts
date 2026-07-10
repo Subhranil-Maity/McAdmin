@@ -24,6 +24,7 @@ async function getDummyServerStatus(): Promise<ServerStatus> {
     port: 25565,
     activePlayers: 3,
     maxPlayers: 20,
+    isReachable: true,
   };
 }
 
@@ -80,6 +81,7 @@ export async function getServerStatus(): Promise<ServerStatus> {
       port,
       activePlayers,
       maxPlayers,
+      isReachable: true,
     };
     
     lastFetchedStatus = serverStatus;
@@ -103,6 +105,7 @@ export async function getServerStatus(): Promise<ServerStatus> {
       port,
       activePlayers: 0,
       maxPlayers: 10,
+      isReachable: false,
     };
     lastFetchedStatus = offlineStatus;
     return offlineStatus;
