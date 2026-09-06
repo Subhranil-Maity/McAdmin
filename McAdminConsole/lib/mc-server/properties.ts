@@ -1,5 +1,5 @@
 import { ServerProperty } from "./types";
-import { delay, getBackendBaseUrl } from "./utils";
+import { delay, getBackendBaseUrl, apiFetch } from "./utils";
 
 const defaultPropertyDefinitions: Record<string, { defaultValue: string; description: string; category: "General" | "Gameplay" | "Network" | "World" }> = {
   motd: { defaultValue: "A Minecraft Server", description: "Message of the Day displayed in server browser.", category: "General" },
@@ -12,6 +12,26 @@ const defaultPropertyDefinitions: Record<string, { defaultValue: string; descrip
   "view-distance": { defaultValue: "10", description: "Number of chunks sent to the player (4-32).", category: "General" },
   "online-mode": { defaultValue: "true", description: "Verify players against Minecraft authentication servers.", category: "Network" },
 };
+
+export async function getServerPropertiesMap(instanceId?: string): Promise<Record<string, string>> {
+  const base = getBackendBaseUrl();
+  if (!base || !instanceId) {
+    await delay(100);
+    const mock: Record<string, string> = {};
+    for (const [k, v] of Object.entries(defaultPropertyDefinitions)) {
+      mock[k] = v.defaultValue;
+    }
+    return mock;
+  }
+
+  const res = await apiFetch(`${base}/api/instances/${encodeURIComponent(instanceId)}/properties`, {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to load properties: ${res.status}`);
+  }
+  return await res.json();
+}
 
 export async function getServerProperties(instanceId?: string): Promise<ServerProperty[]> {
   const base = getBackendBaseUrl();
@@ -27,14 +47,7 @@ export async function getServerProperties(instanceId?: string): Promise<ServerPr
   }
 
   try {
-    const res = await fetch(`${base}/api/instances/${encodeURIComponent(instanceId)}/properties`, {
-      cache: "no-store",
-      credentials: "include",
-    });
-    if (!res.ok) {
-      throw new Error(`Failed to load properties: ${res.status}`);
-    }
-    const data: Record<string, string> = await res.json();
+    const data = await getServerPropertiesMap(instanceId);
 
     const list: ServerProperty[] = [];
     for (const [name, value] of Object.entries(data)) {
@@ -75,11 +88,10 @@ export async function saveServerProperties(
     return;
   }
 
-  const res = await fetch(`${base}/api/instances/${encodeURIComponent(instanceId)}/properties`, {
+  const res = await apiFetch(`${base}/api/instances/${encodeURIComponent(instanceId)}/properties`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(propertiesMap),
-    credentials: "include",
   });
 
   if (!res.ok) {

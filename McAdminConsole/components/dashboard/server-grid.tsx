@@ -3,9 +3,10 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { UserRole } from "@/types/roles";
-import { InstanceSummary, deleteInstance, toggleServerPower } from "@/lib/mc-server";
+import { InstanceSummary, deleteInstance, toggleServerPower, updateInstance } from "@/lib/mc-server";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Server,
   Play,
@@ -17,6 +18,10 @@ import {
   Trash2,
   Settings,
   Loader2,
+  Sliders,
+  X,
+  Layers,
+  AlertCircle,
 } from "lucide-react";
 
 interface ServerGridProps {
@@ -38,6 +43,44 @@ export default function ServerGrid({
 }: ServerGridProps) {
   const [copiedPort, setCopiedPort] = useState<string | null>(null);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+
+  const [editingInstance, setEditingInstance] = useState<InstanceSummary | null>(null);
+  const [editRamGb, setEditRamGb] = useState<number>(2);
+  const [editVersion, setEditVersion] = useState<string>("");
+  const [isEditSaving, setIsEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const openEditModal = (inst: InstanceSummary) => {
+    setEditingInstance(inst);
+    setEditRamGb(inst.ram_gb || 2);
+    setEditVersion(inst.minecraft_version || "");
+    setEditError(null);
+  };
+
+  const closeEditModal = () => {
+    setEditingInstance(null);
+    setEditError(null);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingInstance) return;
+    setIsEditSaving(true);
+    setEditError(null);
+    try {
+      await updateInstance(editingInstance.id, {
+        ram_gb: editRamGb,
+        minecraft_version: editVersion.trim(),
+      });
+      await onRefresh();
+      closeEditModal();
+    } catch (err) {
+      console.error("Failed to update instance:", err);
+      setEditError(err instanceof Error ? err.message : "Failed to update configuration");
+    } finally {
+      setIsEditSaving(false);
+    }
+  };
 
   const handleCopyIp = (ipAddress: string, port: number) => {
     const full = `${ipAddress}:${port}`;
@@ -159,6 +202,11 @@ export default function ServerGrid({
                     </h3>
                     <div className="flex items-center gap-2 text-[11px] text-zinc-500 font-mono mt-0.5">
                       <span>Port {instance.server_port}</span>
+                      {instance.minecraft_version && (
+                        <span className="text-zinc-300 px-1.5 py-0.2 rounded bg-zinc-800/80 border border-zinc-700 font-mono text-[10px]">
+                          v{instance.minecraft_version}
+                        </span>
+                      )}
                       {isOwner && (
                         <span className="text-amber-400 px-1 rounded bg-amber-400/10 border border-amber-400/20 font-sans text-[9px] font-bold uppercase">
                           Owner
@@ -282,6 +330,15 @@ export default function ServerGrid({
                     </Button>
                   )}
 
+                  {/* Quick Edit Config Button */}
+                  <Button
+                    onClick={() => openEditModal(instance)}
+                    className="h-9 px-3 rounded-xl text-xs font-bold bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800 hover:border-zinc-700 cursor-pointer"
+                    title="Edit RAM & Version"
+                  >
+                    <Sliders className="w-3.5 h-3.5 text-indigo-400" />
+                  </Button>
+
                   {/* Delete Button */}
                   {canDelete && (
                     <Button
@@ -310,6 +367,129 @@ export default function ServerGrid({
           </Card>
         );
       })}
+
+      {/* Quick Edit RAM / Version Modal */}
+      {editingInstance && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <Card className="w-full max-w-md border-zinc-800 bg-zinc-900/95 backdrop-blur-xl shadow-2xl rounded-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-5 border-b border-zinc-800/80 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+                  <Sliders className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-sm">Edit Server Configuration</h3>
+                  <p className="text-[11px] text-zinc-400 truncate max-w-[240px]">{editingInstance.name}</p>
+                </div>
+              </div>
+              <button
+                onClick={closeEditModal}
+                disabled={isEditSaving}
+                className="text-zinc-500 hover:text-zinc-300 transition-colors p-1 rounded-lg hover:bg-zinc-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="p-5 space-y-4">
+              {editError && (
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-medium flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{editError}</span>
+                </div>
+              )}
+
+              {/* Minecraft Version */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-300 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-emerald-400" /> Minecraft Version
+                  </span>
+                  <span className="text-[10px] text-zinc-500 font-mono">e.g. 1.20.4, 1.21</span>
+                </label>
+                <Input
+                  type="text"
+                  placeholder="1.20.4"
+                  value={editVersion}
+                  onChange={(e) => setEditVersion(e.target.value)}
+                  disabled={isEditSaving}
+                  className="bg-zinc-950 border-zinc-800 text-xs font-mono rounded-xl placeholder:text-zinc-600 focus-visible:ring-indigo-500"
+                />
+              </div>
+
+              {/* RAM Allocation */}
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                    <HardDrive className="w-3.5 h-3.5 text-purple-400" /> RAM Allocation
+                  </label>
+                  <span className="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-lg">
+                    {editRamGb} GB
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="32"
+                  step="1"
+                  value={editRamGb}
+                  onChange={(e) => setEditRamGb(parseInt(e.target.value, 10))}
+                  disabled={isEditSaving}
+                  className="w-full accent-indigo-500 cursor-pointer"
+                />
+                <div className="flex justify-between text-[10px] text-zinc-500 font-mono">
+                  <span>1 GB</span>
+                  <span>4 GB</span>
+                  <span>8 GB</span>
+                  <span>16 GB</span>
+                  <span>32 GB</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {[2, 4, 6, 8, 12, 16].map((gb) => (
+                    <button
+                      key={gb}
+                      type="button"
+                      onClick={() => setEditRamGb(gb)}
+                      disabled={isEditSaving}
+                      className={`px-2.5 py-1 text-[11px] font-mono rounded-lg border transition-all cursor-pointer ${
+                        editRamGb === gb
+                          ? "bg-indigo-600 text-white border-indigo-500 font-bold"
+                          : "bg-zinc-950 text-zinc-400 border-zinc-800 hover:border-zinc-700 hover:text-zinc-200"
+                      }`}
+                    >
+                      {gb} GB
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <p className="text-[11px] text-zinc-500 flex items-center gap-1.5 pt-1">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>Restart server for RAM changes to take effect.</span>
+              </p>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-zinc-800/80">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={closeEditModal}
+                  disabled={isEditSaving}
+                  className="h-9 px-4 rounded-xl text-xs font-bold border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={isEditSaving}
+                  className="h-9 px-4 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer"
+                >
+                  {isEditSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Save Changes"}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

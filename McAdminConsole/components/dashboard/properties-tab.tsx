@@ -8,15 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { useDashboard } from "./dashboard-context";
-
-// Helper function to normalize and retrieve backend API URL
-const getBackendUrl = () => {
-  const url = process.env.NEXT_PUBLIC_BACKEND_URL || "localhost:8000";
-  if (url.startsWith("http://") || url.startsWith("https://")) {
-    return url;
-  }
-  return `http://${url}`;
-};
+import { getServerPropertiesMap, saveServerProperties } from "@/lib/mc-server";
 
 export default function PropertiesTab() {
   const { instanceId } = useDashboard();
@@ -34,14 +26,7 @@ export default function PropertiesTab() {
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      const endpoint = instanceId
-        ? `${getBackendUrl()}/api/instances/${encodeURIComponent(instanceId)}/properties`
-        : `${getBackendUrl()}/api/server/properties`;
-      const res = await fetch(endpoint, { credentials: "include" });
-      if (!res.ok) {
-        throw new Error(`Server returned status: ${res.status}`);
-      }
-      const data = await res.json();
+      const data = await getServerPropertiesMap(instanceId);
       setProperties(data);
       setEditedProperties(data);
     } catch (err) {
@@ -56,7 +41,7 @@ export default function PropertiesTab() {
 
   useEffect(() => {
     fetchProperties();
-  }, []);
+  }, [instanceId]);
 
   // Update a single property value in state
   const handleInputChange = (key: string, value: string) => {
@@ -79,21 +64,7 @@ export default function PropertiesTab() {
 
     setIsSaving(true);
     try {
-      const endpoint = instanceId
-        ? `${getBackendUrl()}/api/instances/${encodeURIComponent(instanceId)}/properties`
-        : `${getBackendUrl()}/api/server/properties`;
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(editedProperties),
-        credentials: "include",
-      });
-
-      if (!res.ok) {
-        throw new Error(`Server returned error status: ${res.status}`);
-      }
+      await saveServerProperties(editedProperties, instanceId);
 
       setProperties(editedProperties);
       setSuccessMessage("Server properties saved successfully!");

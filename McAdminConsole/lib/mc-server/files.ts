@@ -1,5 +1,5 @@
 import { FileListResponse, FileContentResponse, FileWriteResponse } from "./types";
-import { delay, getBackendBaseUrl, normalizePath } from "./utils";
+import { delay, getBackendBaseUrl, normalizePath, apiFetch, getAuthToken } from "./utils";
 
 interface StaticFile {
   name: string;
@@ -45,7 +45,7 @@ export async function listServerFiles(
     ? `${base}/api/instances/${encodeURIComponent(instanceId)}/files?path=${encodeURIComponent(path)}`
     : `${base}/api/files?path=${encodeURIComponent(path)}`;
 
-  const res = await fetch(endpoint, { cache: "no-store", credentials: "include" });
+  const res = await apiFetch(endpoint, { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`Failed to list files: status ${res.status}`);
   }
@@ -82,7 +82,7 @@ export async function getServerFileContent(
     ? `${base}/api/instances/${encodeURIComponent(instanceId)}/files/content?path=${encodeURIComponent(path)}`
     : `${base}/api/files/content?path=${encodeURIComponent(path)}`;
 
-  const res = await fetch(endpoint, { cache: "no-store", credentials: "include" });
+  const res = await apiFetch(endpoint, { cache: "no-store" });
   if (!res.ok) {
     if (res.status === 413) {
       throw new Error("File exceeds 5MB limit.");
@@ -112,11 +112,10 @@ export async function writeServerFileContent(
     ? `${base}/api/instances/${encodeURIComponent(instanceId)}/files/write`
     : `${base}/api/files/write`;
 
-  const res = await fetch(endpoint, {
+  const res = await apiFetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path, content, force }),
-    credentials: "include",
   });
 
   if (!res.ok) {
@@ -150,10 +149,15 @@ export async function uploadServerFile(
     ? `${base}/api/instances/${encodeURIComponent(instanceId)}/files/upload`
     : `${base}/api/files/upload`;
 
+  const token = await getAuthToken();
+
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", endpoint);
     xhr.withCredentials = true;
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
 
     if (onProgress && xhr.upload) {
       xhr.upload.addEventListener("progress", (event) => {

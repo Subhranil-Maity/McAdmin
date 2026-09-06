@@ -1,5 +1,5 @@
 import { ConsoleLog, CommandResponse } from "./types";
-import { delay, getBackendBaseUrl, parseLogLine } from "./utils";
+import { delay, getBackendBaseUrl, parseLogLine, apiFetch } from "./utils";
 import { lastFetchedStatus } from "./status";
 
 export const logsCache: { list: ConsoleLog[]; byInstance: Record<string, ConsoleLog[]> } = {
@@ -25,7 +25,7 @@ export async function getConsoleLogs(instanceId?: string): Promise<ConsoleLog[]>
     : `${base}/api/status`;
 
   try {
-    const res = await fetch(endpoint, { cache: "no-store", credentials: "include" });
+    const res = await apiFetch(endpoint, { cache: "no-store" });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.recent_logs)) {
@@ -82,11 +82,10 @@ export async function sendConsoleCommand(
     : `${base}/api/server/command`;
 
   try {
-    const res = await fetch(endpoint, {
+    const res = await apiFetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command: cleanCmd }),
-      credentials: "include",
     });
 
     if (!res.ok) {

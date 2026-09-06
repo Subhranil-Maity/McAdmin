@@ -1,5 +1,5 @@
 import { Player } from "./types";
-import { delay, getBackendBaseUrl } from "./utils";
+import { delay, getBackendBaseUrl, apiFetch } from "./utils";
 
 interface BackendPlayer {
   name: string;
@@ -32,7 +32,7 @@ export async function getServerPlayers(instanceId?: string): Promise<Player[]> {
     : `${base}/api/server/players`;
 
   try {
-    const playersRes = await fetch(endpoint, { cache: "no-store", credentials: "include" });
+    const playersRes = await apiFetch(endpoint, { cache: "no-store" });
     if (!playersRes.ok) {
       throw new Error(`Failed to fetch players: status ${playersRes.status}`);
     }
@@ -46,7 +46,7 @@ export async function getServerPlayers(instanceId?: string): Promise<Player[]> {
       const onlineEndpoint = instanceId
         ? `${base}/api/instances/${encodeURIComponent(instanceId)}/players/online`
         : `${base}/api/server/players/online`;
-      const onlineRes = await fetch(onlineEndpoint, { cache: "no-store", credentials: "include" });
+      const onlineRes = await apiFetch(onlineEndpoint, { cache: "no-store" });
       if (onlineRes.ok) {
         const onlineData = await onlineRes.json();
         if (Array.isArray(onlineData)) {
@@ -150,11 +150,10 @@ export async function updatePlayerStatus(
     }
   }
 
-  const res = await fetch(endpoint, {
+  const res = await apiFetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    credentials: "include",
   });
 
   if (!res.ok) {

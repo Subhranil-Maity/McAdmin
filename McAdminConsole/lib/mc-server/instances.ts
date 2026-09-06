@@ -1,4 +1,4 @@
-import { getBackendBaseUrl } from "./utils";
+import { getBackendBaseUrl, apiFetch, getAuthToken } from "./utils";
 
 export interface InstanceSummary {
   id: string;
@@ -7,6 +7,7 @@ export interface InstanceSummary {
   server_port: number;
   rcon_port: number;
   ram_gb: number;
+  minecraft_version?: string;
   created_at: string;
   owner_id?: string;
   admins: string[];
@@ -24,6 +25,7 @@ export interface InstanceDetail {
   rcon_port: number;
   rcon_password?: string;
   ram_gb: number;
+  minecraft_version?: string;
   created_at: string;
   owner_id?: string;
   admins: string[];
@@ -49,9 +51,8 @@ export async function listInstances(): Promise<InstanceSummary[]> {
     ];
   }
 
-  const res = await fetch(`${base}/api/instances`, {
+  const res = await apiFetch(`${base}/api/instances`, {
     cache: "no-store",
-    credentials: "include",
   });
 
   if (!res.ok) {
@@ -77,9 +78,8 @@ export async function getInstance(id: string): Promise<InstanceDetail> {
     };
   }
 
-  const res = await fetch(`${base}/api/instances/${encodeURIComponent(id)}`, {
+  const res = await apiFetch(`${base}/api/instances/${encodeURIComponent(id)}`, {
     cache: "no-store",
-    credentials: "include",
   });
 
   if (!res.ok) {
@@ -108,10 +108,15 @@ export async function createInstance(
     };
   }
 
+  const token = await getAuthToken();
+
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${base}/api/instances`);
     xhr.withCredentials = true;
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
 
     if (onProgress && xhr.upload) {
       xhr.upload.addEventListener("progress", (event) => {
@@ -143,9 +148,8 @@ export async function deleteInstance(id: string): Promise<void> {
   const base = getBackendBaseUrl();
   if (!base) return;
 
-  const res = await fetch(`${base}/api/instances/${encodeURIComponent(id)}`, {
+  const res = await apiFetch(`${base}/api/instances/${encodeURIComponent(id)}`, {
     method: "DELETE",
-    credentials: "include",
   });
 
   if (!res.ok) {
@@ -169,15 +173,58 @@ export async function updateInstanceAdmins(id: string, admins: string[]): Promis
     };
   }
 
-  const res = await fetch(`${base}/api/instances/${encodeURIComponent(id)}/admins`, {
+  const res = await apiFetch(`${base}/api/instances/${encodeURIComponent(id)}/admins`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ admins }),
-    credentials: "include",
   });
 
   if (!res.ok) {
     throw new Error(`Failed to update instance admins: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export interface UpdateInstancePayload {
+  ram_gb?: number;
+  minecraft_version?: string;
+  name?: string;
+}
+
+export async function updateInstance(
+  id: string,
+  payload: UpdateInstancePayload
+): Promise<InstanceDetail> {
+  const base = getBackendBaseUrl();
+  if (!base) {
+    return {
+      id,
+      name: payload.name || "Demo Instance",
+      folder: `instances/${id}`,
+      jar_name: "server.jar",
+      server_port: 25565,
+      rcon_port: 25575,
+      ram_gb: payload.ram_gb ?? 4,
+      minecraft_version: payload.minecraft_version ? payload.minecraft_version.trim() : undefined,
+      created_at: new Date().toISOString(),
+      admins: [],
+    };
+  }
+
+  const cleanedPayload: UpdateInstancePayload = { ...payload };
+  if (cleanedPayload.minecraft_version !== undefined) {
+    cleanedPayload.minecraft_version = cleanedPayload.minecraft_version.trim();
+  }
+
+  const res = await apiFetch(`${base}/api/instances/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(cleanedPayload),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to update instance: ${res.status}`);
   }
 
   return res.json();

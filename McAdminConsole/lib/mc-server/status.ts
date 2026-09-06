@@ -1,5 +1,5 @@
 import { ServerStatus, ServerStatusState } from "./types";
-import { delay, getBackendBaseUrl, parseLogLine } from "./utils";
+import { delay, getBackendBaseUrl, parseLogLine, apiFetch } from "./utils";
 import { logsCache } from "./console";
 
 export let lastFetchedStatus: ServerStatus | null = null;
@@ -40,7 +40,7 @@ export async function getServerStatus(instanceId?: string): Promise<ServerStatus
     : `${base}/api/status`;
 
   try {
-    const res = await fetch(endpoint, { cache: "no-store", credentials: "include" });
+    const res = await apiFetch(endpoint, { cache: "no-store" });
     if (!res.ok) {
       throw new Error(`HTTP error! status: ${res.status}`);
     }
@@ -80,7 +80,7 @@ export async function getServerStatus(instanceId?: string): Promise<ServerStatus
       ramUsed,
       ramMax,
       uptime,
-      version: "Minecraft",
+      version: data.minecraft_version || "Minecraft",
       ipAddress,
       port,
       activePlayers,
@@ -133,22 +133,22 @@ export async function toggleServerPower(
     : `${base}/api/server/stop`;
 
   if (action === "start") {
-    const res = await fetch(startUrl, { method: "POST", credentials: "include" });
+    const res = await apiFetch(startUrl, { method: "POST" });
     if (!res.ok) {
       throw new Error(`Failed to start server: status ${res.status}`);
     }
   } else if (action === "stop") {
-    const res = await fetch(stopUrl, { method: "POST", credentials: "include" });
+    const res = await apiFetch(stopUrl, { method: "POST" });
     if (!res.ok) {
       throw new Error(`Failed to stop server: status ${res.status}`);
     }
   } else if (action === "restart") {
-    const resStop = await fetch(stopUrl, { method: "POST", credentials: "include" });
+    const resStop = await apiFetch(stopUrl, { method: "POST" });
     if (!resStop.ok) {
       throw new Error(`Failed to stop server during restart: status ${resStop.status}`);
     }
     await delay(2000);
-    const resStart = await fetch(startUrl, { method: "POST", credentials: "include" });
+    const resStart = await apiFetch(startUrl, { method: "POST" });
     if (!resStart.ok) {
       throw new Error(`Failed to start server during restart: status ${resStart.status}`);
     }

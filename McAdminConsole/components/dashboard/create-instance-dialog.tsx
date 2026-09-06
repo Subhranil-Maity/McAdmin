@@ -39,6 +39,7 @@ export default function CreateInstanceDialog({
   }
 
   const [name, setName] = useState("");
+  const [minecraftVersion, setMinecraftVersion] = useState("1.20.4");
   const [ramGb, setRamGb] = useState(2);
   const [serverPort, setServerPort] = useState(nextServerPort);
   const [rconPort, setRconPort] = useState(nextRconPort);
@@ -93,6 +94,9 @@ export default function CreateInstanceDialog({
 
     const formData = new FormData();
     formData.append("name", name.trim());
+    if (minecraftVersion.trim()) {
+      formData.append("minecraft_version", minecraftVersion.trim());
+    }
     formData.append("ram_gb", ramGb.toString());
     formData.append("server_port", serverPort.toString());
     formData.append("rcon_port", rconPort.toString());
@@ -161,6 +165,22 @@ export default function CreateInstanceDialog({
                 disabled={isLoading}
                 required
                 className="bg-zinc-950 border-zinc-800 text-xs rounded-xl focus-visible:ring-indigo-500"
+              />
+            </div>
+
+            {/* Minecraft Version */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-zinc-300 flex items-center justify-between">
+                <span>Minecraft Version</span>
+                <span className="text-[10px] text-zinc-500 font-mono">e.g. 1.20.4</span>
+              </label>
+              <Input
+                type="text"
+                placeholder="1.20.4"
+                value={minecraftVersion}
+                onChange={(e) => setMinecraftVersion(e.target.value)}
+                disabled={isLoading}
+                className="bg-zinc-950 border-zinc-800 text-xs font-mono rounded-xl placeholder:text-zinc-600 focus-visible:ring-indigo-500"
               />
             </div>
 

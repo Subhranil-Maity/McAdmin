@@ -29,6 +29,7 @@ import {
 interface DashboardContextType {
   instanceId?: string;
   instanceDetail: InstanceDetail | null;
+  refreshInstanceDetail: () => Promise<void>;
   allInstances: InstanceSummary[];
   refreshAllInstances: () => Promise<void>;
   userRole: UserRole;
@@ -114,8 +115,18 @@ export function DashboardProvider({
     try {
       const list = await listInstances();
       setAllInstances(list);
+    } catch (err) {
+      console.error("Failed to refresh instances:", err);
+    }
+  };
+
+  const refreshInstanceDetail = async () => {
+    if (!instanceId) return;
+    try {
+      const detail = await getInstance(instanceId);
+      setInstanceDetail(detail);
     } catch (e) {
-      console.error("Failed to load instances list:", e);
+      console.error("Failed to refresh instance detail:", e);
     }
   };
 
@@ -331,6 +342,7 @@ export function DashboardProvider({
       value={{
         instanceId,
         instanceDetail,
+        refreshInstanceDetail,
         allInstances,
         refreshAllInstances,
         userRole,

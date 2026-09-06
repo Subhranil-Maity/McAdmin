@@ -19,6 +19,91 @@ export function getBackendStatusUrl(): string {
   return base ? `${base}/api/status` : "";
 }
 
+/**
+ * Safely retrieve current Clerk session JWT token in the browser.
+ */
+export async function getAuthToken(): Promise<string | null> {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  // 1. Try window.Clerk.session.getToken()
+  try {
+    const clerk = (window as unknown as { Clerk?: { session?: { getToken: (opts?: { skipCache?: boolean }) => Promise<string | null> } } }).Clerk;
+    if (clerk?.session) {
+      const token = await clerk.session.getToken();
+      if (token) return token;
+    }
+  } catch (err) {
+    console.debug("Could not get token from window.Clerk:", err);
+  }
+
+  // 2. Try parsing __session cookie from document.cookie
+  try {
+    const match = document.cookie.match(/(?:^|;\s*)__session=([^;]+)/);
+    if (match && match[1]) {
+      return decodeURIComponent(match[1]);
+    }
+  } catch (err) {
+    console.debug("Could not get token from document.cookie:", err);
+  }
+
+  // 3. If Clerk is still initializing, retry up to 5 times (500ms max)
+  for (let i = 0; i < 5; i++) {
+    await delay(100);
+    try {
+      const clerk = (window as unknown as { Clerk?: { session?: { getToken: (opts?: { skipCache?: boolean }) => Promise<string | null> } } }).Clerk;
+      if (clerk?.session) {
+        const token = await clerk.session.getToken();
+        if (token) return token;
+      }
+      const match = document.cookie.match(/(?:^|;\s*)__session=([^;]+)/);
+      if (match && match[1]) {
+        return decodeURIComponent(match[1]);
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+/**
+ * Standard fetch wrapper that automatically injects Clerk Bearer token.
+ */
+export async function apiFetch(input: string | URL, init?: RequestInit): Promise<Response> {
+  let token = await getAuthToken();
+  const headers = new Headers(init?.headers);
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  let res = await fetch(input, {
+    ...init,
+    headers,
+    credentials: "include",
+  });
+
+  // If 401 occurs, attempt a single token refresh retry
+  if (res.status === 401 && typeof window !== "undefined") {
+    try {
+      const clerk = (window as unknown as { Clerk?: { session?: { getToken: (opts?: { skipCache?: boolean }) => Promise<string | null> } } }).Clerk;
+      if (clerk?.session) {
+        token = await clerk.session.getToken({ skipCache: true });
+        if (token) {
+          headers.set("Authorization", `Bearer ${token}`);
+          res = await fetch(input, {
+            ...init,
+            headers,
+            credentials: "include",
+          });
+        }
+      }
+    } catch {}
+  }
+
+  return res;
+}
+
 // Utility to format uptime seconds into readable string (e.g., 5h 56m 31s or 32m 12s)
 export function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);

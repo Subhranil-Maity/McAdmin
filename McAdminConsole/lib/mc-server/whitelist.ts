@@ -1,5 +1,5 @@
 import { WhitelistEntry } from "./types";
-import { delay, getBackendBaseUrl } from "./utils";
+import { delay, getBackendBaseUrl, apiFetch } from "./utils";
 import { getServerPlayers } from "./players";
 
 const dummyWhitelist: WhitelistEntry[] = [
@@ -47,11 +47,10 @@ export async function addWhitelist(username: string, instanceId?: string): Promi
     ? `${base}/api/instances/${encodeURIComponent(instanceId)}/players/whitelist`
     : `${base}/api/server/players/whitelist`;
 
-  const res = await fetch(endpoint, {
+  const res = await apiFetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ player: username }),
-    credentials: "include",
   });
   if (!res.ok) {
     throw new Error(`Failed to add player to whitelist: status ${res.status}`);
@@ -75,11 +74,10 @@ export async function removeWhitelist(entryId: string, instanceId?: string): Pro
     ? `${base}/api/instances/${encodeURIComponent(instanceId)}/players/dewhitelist`
     : `${base}/api/server/players/dewhitelist`;
 
-  const res = await fetch(endpoint, {
+  const res = await apiFetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ player: entryId }),
-    credentials: "include",
   });
   if (!res.ok) {
     throw new Error(`Failed to remove player from whitelist: status ${res.status}`);
