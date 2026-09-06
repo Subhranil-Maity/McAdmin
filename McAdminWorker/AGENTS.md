@@ -1,119 +1,122 @@
 # mc_admin_worker
 
-Rust/Axum service for managing a Minecraft server worker process.
+Rust/Axum service for managing multi-instance Minecraft servers with isolated runtimes, automated port allocation, Clerk authentication, and hardware resource controls.
 
-## Runtime
+## Runtime & Environment
 
-- Loads `.env` at startup with `dotenvy`.
-- Requires `ADMIN_WORKER_HOST`, `ADMIN_WORKER_PORT`, and `HOME_DIR`.
-- Requires `RCON_HOST`, `RCON_PORT`, and `RCON_PASSWORD` for RCON command forwarding.
-- Requires `CLERK_SECRET_KEY` for Clerk authentication.
-- Binds the HTTP server from `ADMIN_WORKER_HOST:ADMIN_WORKER_PORT`.
-- Uses `HOME_DIR` as the Minecraft server directory.
-- Reads config from `HOME_DIR/admin_worker_config.json`.
-- Reads and writes Minecraft server properties from `HOME_DIR/server.properties`.
-- Defaults `SERVER_RAM` to `1` if missing.
-- Defaults `JAR_PATH` to `./server.jar` if missing.
+- Loads environment variables at startup via `dotenvy`.
+- Required environment variables:
+  - `ADMIN_WORKER_HOST`: IP/host interface to bind (e.g. `0.0.0.0` or `127.0.0.1`).
+  - `ADMIN_WORKER_PORT`: HTTP port to listen on (e.g. `8000`).
+  - `HOME_DIR`: Root working directory where instance folders and configs are stored.
+  - `RCON_HOST`: IP/host for RCON connections (e.g. `127.0.0.1`).
+  - `CLERK_SECRET_KEY`: Clerk secret key for JWT verification and user role queries.
+- Binds HTTP server on `${ADMIN_WORKER_HOST}:${ADMIN_WORKER_PORT}`.
+- Global master configuration is stored in `${HOME_DIR}/mc_config.json`.
+- Server instances reside in `${HOME_DIR}/instances/<instance_id>/`.
 
-## Config
+## CORS Policy
 
-- Config is persisted on disk as a JSON key/value map.
-- Current read-only config keys exposed by the API:
-  - `SERVER_RAM`
-  - `JAR_PATH`
-- `SERVER_RAM` controls the Java heap size passed to the Minecraft server start command.
-- `JAR_PATH` is resolved relative to the worker process current working directory when it is not absolute.
+- Configured via `tower_http::cors::CorsLayer`:
+  - `allow_origin`: `AllowOrigin::mirror_request()` (dynamically echoes the incoming `Origin` to satisfy credentials on any domain, IP, Tailscale node, or LAN address).
+  - `allow_headers`: `AllowHeaders::mirror_request()`.
+  - `allow_credentials`: `true`.
+  - `allow_methods`: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `OPTIONS`, `HEAD`.
 
-## HTTP API
+## Authentication & Permissions
 
-- `GET /`
-  - Health response for the worker. **Public (no auth).**
-- `GET /api/status`
-  - Returns worker/server runtime status and system metrics. **Public (no auth).**
-- `POST /api/server/start`
-  - Starts the Minecraft server process.
-- `POST /api/server/stop`
-  - Stops the running Minecraft server process.
-- `POST /api/server/command`
-  - Sends a command to the running Minecraft server over RCON.
-- `GET /api/server/properties`
-  - Returns `HOME_DIR/server.properties` as a JSON key/value map.
-- `POST /api/server/properties`
-  - Replaces `HOME_DIR/server.properties` with the provided full JSON key/value map and returns it.
-- `GET /api/server/players`
-  - Returns all known players from `usercache.json` enriched with op/whitelist/ban status from `ops.json`, `whitelist.json`, and `banned-players.json`.
-- `GET /api/server/players/online`
-  - Returns currently online players via RCON `list` command. Requires server to be `ONLINE`.
-- `POST /api/server/players/ban`
-  - Bans a player. If server is `ONLINE` uses RCON `ban`; if `OFFLINE` writes to `banned-players.json` (requires player to exist in `usercache.json`). Body: `{ "player": "name", "reason?": "..." }`.
-- `POST /api/server/players/unban`
-  - Unbans a player. If server is `ONLINE` uses RCON `pardon`; if `OFFLINE` removes from `banned-players.json`. Body: `{ "player": "name" }`.
-- `POST /api/server/players/whitelist`
-  - Whitelists a player. If server is `ONLINE` uses RCON `whitelist add`; if `OFFLINE` writes to `whitelist.json` (requires player to exist in `usercache.json`). Body: `{ "player": "name" }`.
-- `POST /api/server/players/dewhitelist`
-  - Dewhitelsists a player. If server is `ONLINE` uses RCON `whitelist remove`; if `OFFLINE` removes from `whitelist.json`. Body: `{ "player": "name" }`.
-- `POST /api/server/players/op`
-  - Ops a player (level 4). If server is `ONLINE` uses RCON `op`; if `OFFLINE` writes to `ops.json` (requires player to exist in `usercache.json`). Body: `{ "player": "name" }`.
-- `POST /api/server/players/deop`
-  - Deops a player. If server is `ONLINE` uses RCON `deop`; if `OFFLINE` removes from `ops.json`. Body: `{ "player": "name" }`.
-- `GET /api/config`
-  - Lists persisted config entries.
-- `GET /api/config/{key}`
-  - Reads one persisted config entry.
+- `ClerkAuthLayer` middleware validates incoming requests:
+  - `OPTIONS` preflight requests and `GET /` (health check) are public and bypass authentication.
+  - All other routes require authentication via `Authorization: Bearer <token>` or `__session` cookie.
+  - JWT tokens are cryptographically verified using Clerk's JWKS public keys (`clerk_rs::validators::jwks::JwksProvider`).
+  - Upon token validation, the user's role is queried from Clerk Backend API (`GET /users/{user_id}`) and cached in-memory for 60 minutes.
+- Roles and Instance Permissions:
+  - `superadmin`: Role in Clerk `public_metadata.role == "superadmin"` or `"owner"`. Has access to all instances and operations.
+  - `owner` (`owner_id`): Creator/owner of the instance. Can delete instances, manage admins, edit configs, and control runtime.
+  - `admin` (`admins` list): Assigned instance admin. Can manage server lifecycle (start/stop), execute commands, edit properties/files, and update RAM / version configuration.
 
-## Auth
+## Master Config (`mc_config.json`)
 
-- All routes except `GET /` and `GET /api/status` require Clerk authentication.
-- Accepts `Authorization: Bearer <token>` header or `__session` cookie.
-- JWT is verified against Clerk's JWKS (RS256).
-- After JWT validation, the user is fetched from Clerk Backend API (`GET /users/{user_id}`).
-- `public_metadata.role` must be `"admin"` or `"owner"` (case-insensitive).
-- User roles are cached in-memory for 60 minutes to avoid repeated API calls.
-- Logs: `auth OK`, `role cache hit` (with remaining TTL), `role cache miss`, `auth rejected` (with reason).
+Managed by `McConfigManager`:
+```json
+{
+  "version": 1,
+  "instances": [
+    {
+      "id": "uuid-v4",
+      "name": "Survival Server",
+      "folder": "instances/uuid-v4",
+      "jar_name": "server.jar",
+      "server_port": 25565,
+      "rcon_port": 25575,
+      "rcon_password": "rcon_secret_password",
+      "ram_gb": 4,
+      "minecraft_version": "1.20.4",
+      "created_at": "2026-09-06T12:00:00Z",
+      "owner_id": "user_2...",
+      "admins": ["user_3..."]
+    }
+  ]
+}
+```
 
-## Server lifecycle
+- Automatic port collision detection and allocation for `server_port` (starts at 25565) and `rcon_port` (starts at 25575).
+- `ram_gb`: Java heap allocation (`-Xms<N>G -Xmx<N>G`).
+- `minecraft_version`: Stored as a trimmed string.
 
-- The runtime tracks Minecraft state in memory.
-- Status values are `OFFLINE`, `STARTING`, and `ONLINE`.
-- Starting the server spawns `java -jar <jar> nogui` with `-Xms` and `-Xmx` based on `SERVER_RAM`.
-- Stopping the server kills the stored child process handle and clears runtime state.
-- Server commands are sent with `rcon-tokio` through a shared RCON client stored in app state.
-- Recent logs are captured from the Minecraft process stdout/stderr into a 15,000-line circular buffer.
-- `GET /api/status` returns the most recent 250 captured log lines in chronological order.
-- `GET /api/status` reports CPU, RAM used, and uptime scoped to the running Minecraft server process (PID), with `ram_allocated_mb` derived from the configured `SERVER_RAM`.
-- Player counts in `GET /api/status` are dynamically queried via RCON `list` when `ONLINE`.
+## HTTP API Endpoints
 
-## Dependencies
+### Health Check
+- `GET /`: Health check endpoint. Returns `OK`. **Public (no auth).**
 
-- `axum`
-- `axum-extra` with `cookie`
-- `chrono`
-- `clerk-rs` with `axum`
-- `tokio` with `full`
-- `tower`
-- `futures-util`
-- `serde`
-- `serde_json`
-- `dotenvy`
-- `circular-queue`
-- `rcon-tokio`
-- `sysinfo`
-- `tower-http` with `cors`
+### Instance Management
+- `GET /api/instances`: Lists all instances with real-time status summary, player counts, ports, RAM, and version.
+- `POST /api/instances`: Creates a new instance. Accepts multipart form data:
+  - `name`: Server display name (required).
+  - `file`: Minecraft server `.jar` binary (required).
+  - `ram_gb`: RAM allocation in GB (default: `2`).
+  - `minecraft_version` (or `version`): Minecraft version string (trimmed on save).
+  - `server_port`: Optional preferred Minecraft game port.
+  - `rcon_port`: Optional preferred RCON port.
+  - Payload limit: up to 1 GB.
+- `GET /api/instances/{id}`: Returns full `InstanceConfig` details.
+- `PATCH /api/instances/{id}` and `POST /api/instances/{id}`: Updates instance settings:
+  - Body: `{ "ram_gb"?: number, "minecraft_version"?: string, "name"?: string }`.
+  - String values are automatically trimmed before persisting to config and memory runtime.
+- `DELETE /api/instances/{id}`: Deletes the instance, stops runtime if running, and recursively deletes its folder.
 
-## Player API reference
+### Server Lifecycle & Telemetry
+- `GET /api/instances/{id}/status`: Returns live status (`ONLINE`, `OFFLINE`, `STARTING`), CPU %, RAM allocated vs used, uptime in seconds, active/max players, version, and the 250 most recent console log lines.
+- `POST /api/instances/{id}/start`: Launches `java -jar <jar_name> nogui -Xms<ram_gb>G -Xmx<ram_gb>G` in the instance directory.
+- `POST /api/instances/{id}/stop`: Gracefully stops the instance via RCON or terminates process.
+- `POST /api/instances/{id}/command`: Sends an RCON command. Body: `{ "command": "say Hello" }`.
 
-A standalone reference for all player-related endpoints is in `PLAYER_API.md`. Update it when adding or changing player endpoints.
+### Admins & Permissions
+- `POST /api/instances/{id}/admins`: Updates instance admin list. Body: `{ "admins": ["user_1", "user_2"] }`. Restricted to instance owner or superadmin.
 
-## File API reference
+### Server Properties
+- `GET /api/instances/{id}/properties`: Reads `server.properties` and returns key/value JSON map.
+- `POST /api/instances/{id}/properties`: Writes full key/value map to `server.properties`.
 
-A standalone reference for all file-related endpoints is in `FILES_API.md`. Update it when adding or changing file endpoints.
+### Players Management
+- `GET /api/instances/{id}/players`: Enriched player list from `usercache.json`, `ops.json`, `whitelist.json`, `banned-players.json`.
+- `GET /api/instances/{id}/players/online`: Current online usernames from live RCON `list`.
+- `POST /api/instances/{id}/players/{action}`: Player actions (`ban`, `unban`, `whitelist`, `dewhitelist`, `op`, `deop`, `kick`). Body: `{ "player": "name", "reason?": "..." }`.
 
-## Development
+### Files Management
+- `GET /api/instances/{id}/files?path=<rel_path>`: Lists directory entries inside instance folder.
+- `GET /api/instances/{id}/files/content?path=<rel_path>`: Reads text file content (up to 5 MB).
+- `POST /api/instances/{id}/files/write`: Writes content to file. Body: `{ "path": "...", "content": "...", "force": false }`.
+- `POST /api/instances/{id}/files/upload`: Multipart file upload into instance folder (up to 1 GB).
 
-- Use `cargo fmt`.
-- Use `cargo check` for fast verification.
-- Use `cargo build` for a full build.
+## Logging & RCON
 
-## Maintenance
+- Each running instance has an isolated 15,000-line circular log ring buffer capturing stdout/stderr.
+- Commands and queries use an isolated Tokio RCON client connecting to the instance's unique RCON port and password.
 
-- Update this file when you think it is outdated.
+## Development & Verification
+
+- Formatter: `cargo fmt`
+- Typecheck & validation: `cargo check`
+- Test suite: `cargo test`
+- Release build: `cargo build --release`
