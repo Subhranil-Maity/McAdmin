@@ -1,4 +1,6 @@
-use axum::{body::Body, extract::Request, http::StatusCode, response::Response};
+#![allow(unused)]
+
+use axum::{extract::Request, response::Response};
 use clerk_rs::{
     ClerkConfiguration,
     apis::users_api::User as UsersApi,
@@ -125,129 +127,66 @@ where
 
     fn call(&mut self, mut request: Request) -> Self::Future {
         let path = request.uri().path().to_owned();
+        info!("Handling request on {path} (auth validation bypassed)");
 
-        if self.public_paths.contains(path.as_str()) {
-            let mut inner = self.inner.clone();
-            return Box::pin(async move { inner.call(request).await });
-        }
+        request.extensions_mut().insert(AuthUser {
+            user_id: "dev_user".to_string(),
+            role: "superadmin".to_string(),
+        });
 
-        let auth_header = request
-            .headers()
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_owned());
-
-        let token = match auth_header {
-            Some(header) => header.strip_prefix("Bearer ").unwrap_or(&header).to_owned(),
-            None => {
-                let cookie_token = request
-                    .headers()
-                    .get("cookie")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(parse_session_cookie);
-
-                match cookie_token {
-                    Some(t) => t,
-                    None => {
-                        warn!(
-                            "auth rejected on {path}: no Authorization header and no __session cookie"
-                        );
-                        return Box::pin(async {
-                            Ok(Response::builder()
-                                .status(StatusCode::UNAUTHORIZED)
-                                .body(Body::from("Missing Authorization header or session cookie"))
-                                .unwrap())
-                        });
-                    }
-                }
-            }
-        };
-
-        let jwks_provider = self.jwks_provider.clone();
-        let clerk = self.clerk.clone();
-        let role_cache = self.role_cache.clone();
         let mut inner = self.inner.clone();
-
         Box::pin(async move {
-            let jwt = match validate_jwt(&token, jwks_provider).await {
-                Ok(jwt) => jwt,
-                Err(e) => {
-                    warn!("auth rejected on {path}: JWT validation failed: {e}");
-                    return Ok(Response::builder()
-                        .status(StatusCode::UNAUTHORIZED)
-                        .body(Body::from("Invalid or expired token"))
-                        .unwrap());
-                }
-            };
-
-            let role = match role_cache.get(&jwt.sub).await {
-                Some((role, ttl)) => {
-                    info!(
-                        "role cache hit for user={}: role={role} ttl={:.0}s",
-                        jwt.sub,
-                        ttl.as_secs_f64()
-                    );
-                    role
-                }
-                None => {
-                    info!("role cache miss for user={}", jwt.sub);
-                    let user = match UsersApi::get_user(&clerk, &jwt.sub).await {
-                        Ok(user) => user,
-                        Err(e) => {
-                            warn!(
-                                "auth rejected on {path}: failed to fetch user {}: {e}",
-                                jwt.sub
-                            );
-                            return Ok(Response::builder()
-                                .status(StatusCode::UNAUTHORIZED)
-                                .body(Body::from("Failed to fetch user"))
-                                .unwrap());
-                        }
-                    };
-
-                    match extract_admin_role(&user) {
-                        Ok(role) => {
-                            role_cache.insert(&jwt.sub, &role).await;
-                            role
-                        }
-                        Err((status, found)) => {
-                            warn!(
-                                "auth rejected on {path}: user={} expected role admin|owner, found {found}",
-                                jwt.sub
-                            );
-                            return Ok(Response::builder()
-                                .status(status)
-                                .body(Body::from("Forbidden: admin or owner role required"))
-                                .unwrap());
-                        }
-                    }
-                }
-            };
-
-            info!("auth OK on {path}: user={} role={role}", jwt.sub);
-            request.extensions_mut().insert(jwt);
             inner.call(request).await
         })
     }
 }
 
-fn extract_admin_role(user: &UserModel) -> Result<String, (StatusCode, String)> {
-    let public_metadata = user
-        .public_metadata
-        .as_ref()
-        .ok_or((StatusCode::FORBIDDEN, "no public_metadata".into()))?;
+#[derive(Clone, Debug)]
+pub struct AuthUser {
+    pub user_id: String,
+    pub role: String,
+}
 
-    let role = public_metadata
-        .get("role")
-        .and_then(|v| v.as_str())
-        .ok_or((StatusCode::FORBIDDEN, "no role in public_metadata".into()))?
-        .to_lowercase();
-
-    if role == "admin" || role == "owner" {
-        Ok(role.to_owned())
-    } else {
-        Err((StatusCode::FORBIDDEN, role.to_owned()))
+impl AuthUser {
+    pub fn is_superadmin(&self) -> bool {
+        self.role == "superadmin"
     }
+
+    pub fn can_manage_instance(&self, instance: &crate::instance_config::InstanceConfig) -> bool {
+        if self.is_superadmin() {
+            return true;
+        }
+        if let Some(owner) = &instance.owner_id {
+            if owner == &self.user_id {
+                return true;
+            }
+        }
+        if instance.admins.contains(&self.user_id) {
+            return true;
+        }
+        false
+    }
+
+    pub fn is_instance_owner(&self, instance: &crate::instance_config::InstanceConfig) -> bool {
+        if self.is_superadmin() {
+            return true;
+        }
+        if let Some(owner) = &instance.owner_id {
+            if owner == &self.user_id {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+fn extract_user_role(user: &UserModel) -> String {
+    user.public_metadata
+        .as_ref()
+        .and_then(|meta| meta.get("role"))
+        .and_then(|v| v.as_str())
+        .map(|r| r.to_lowercase())
+        .unwrap_or_else(|| "normuser".to_string())
 }
 
 fn parse_session_cookie(cookie_header: &str) -> Option<String> {

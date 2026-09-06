@@ -80,7 +80,8 @@ Rust/Axum service for managing a Minecraft server worker process.
 - Server commands are sent with `rcon-tokio` through a shared RCON client stored in app state.
 - Recent logs are captured from the Minecraft process stdout/stderr into a 15,000-line circular buffer.
 - `GET /api/status` returns the most recent 250 captured log lines in chronological order.
-- Player counts are currently stubbed at `active_players = 0` and `max_players = 10`.
+- `GET /api/status` reports CPU, RAM used, and uptime scoped to the running Minecraft server process (PID), with `ram_allocated_mb` derived from the configured `SERVER_RAM`.
+- Player counts in `GET /api/status` are dynamically queried via RCON `list` when `ONLINE`.
 
 ## Dependencies
 
