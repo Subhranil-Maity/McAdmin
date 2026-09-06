@@ -1,5 +1,6 @@
 export * from "./types";
 export * from "./utils";
+export * from "./instances";
 export * from "./status";
 export * from "./console";
 export * from "./players";

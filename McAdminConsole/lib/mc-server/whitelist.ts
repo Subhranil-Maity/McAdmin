@@ -1,5 +1,5 @@
 import { WhitelistEntry } from "./types";
-import { delay } from "./utils";
+import { delay, getBackendBaseUrl } from "./utils";
 import { getServerPlayers } from "./players";
 
 const dummyWhitelist: WhitelistEntry[] = [
@@ -9,21 +9,21 @@ const dummyWhitelist: WhitelistEntry[] = [
   { id: "w4", username: "Steve", addedAt: "2026-07-02 18:12" },
 ];
 
-export async function getWhitelist(): Promise<WhitelistEntry[]> {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
-  if (!backendUrl) {
+export async function getWhitelist(instanceId?: string): Promise<WhitelistEntry[]> {
+  const base = getBackendBaseUrl();
+  if (!base) {
     await delay(100);
     return [...dummyWhitelist];
   }
 
   try {
-    const players = await getServerPlayers();
+    const players = await getServerPlayers(instanceId);
     return players
       .filter((p) => p.isWhitelisted)
       .map((p) => ({
         id: p.username,
         username: p.username,
-        addedAt: "Added"
+        addedAt: "Added",
       }));
   } catch (e) {
     console.error("Error fetching whitelist:", e);
@@ -31,9 +31,9 @@ export async function getWhitelist(): Promise<WhitelistEntry[]> {
   }
 }
 
-export async function addWhitelist(username: string): Promise<WhitelistEntry> {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
-  if (!backendUrl) {
+export async function addWhitelist(username: string, instanceId?: string): Promise<WhitelistEntry> {
+  const base = getBackendBaseUrl();
+  if (!base) {
     await delay(100);
     const cleanUser = username.trim();
     return {
@@ -43,13 +43,11 @@ export async function addWhitelist(username: string): Promise<WhitelistEntry> {
     };
   }
 
-  let base = backendUrl;
-  if (!/^https?:\/\//i.test(base)) {
-    base = `http://${base}`;
-  }
-  base = base.replace(/\/+$/, "");
+  const endpoint = instanceId
+    ? `${base}/api/instances/${encodeURIComponent(instanceId)}/players/whitelist`
+    : `${base}/api/server/players/whitelist`;
 
-  const res = await fetch(`${base}/api/server/players/whitelist`, {
+  const res = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ player: username }),
@@ -62,24 +60,22 @@ export async function addWhitelist(username: string): Promise<WhitelistEntry> {
   return {
     id: username,
     username,
-    addedAt: new Date().toISOString().slice(0, 16).replace("T", " ")
+    addedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
   };
 }
 
-export async function removeWhitelist(entryId: string): Promise<void> {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
-  if (!backendUrl) {
+export async function removeWhitelist(entryId: string, instanceId?: string): Promise<void> {
+  const base = getBackendBaseUrl();
+  if (!base) {
     await delay(100);
     return;
   }
 
-  let base = backendUrl;
-  if (!/^https?:\/\//i.test(base)) {
-    base = `http://${base}`;
-  }
-  base = base.replace(/\/+$/, "");
+  const endpoint = instanceId
+    ? `${base}/api/instances/${encodeURIComponent(instanceId)}/players/dewhitelist`
+    : `${base}/api/server/players/dewhitelist`;
 
-  const res = await fetch(`${base}/api/server/players/dewhitelist`, {
+  const res = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ player: entryId }),

@@ -76,7 +76,7 @@ export default async function Home() {
             <div className="space-y-1">
               <h3 className="font-bold text-white text-base">OWNER Role</h3>
               <p className="text-xs text-zinc-400 leading-relaxed">
-                Full directory privileges. View the dashboard, navigate users, and update anyone's role.
+                Full directory privileges. View the dashboard, navigate users, and update anyone&apos;s role.
               </p>
             </div>
           </div>

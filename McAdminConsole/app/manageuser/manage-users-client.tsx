@@ -3,7 +3,7 @@
 import React, { useState, useTransition } from "react";
 import { UserRole } from "@/types/roles";
 import { updateUserRole } from "@/app/actions/user";
-import { Search, Shield, Settings, User, Loader2, Check, AlertCircle, ArrowLeft } from "lucide-react";
+import { Search, Shield, Settings, User, Loader2, Check, AlertCircle, ArrowLeft, Crown } from "lucide-react";
 import Link from "next/link";
 
 interface SerializableUser {
@@ -32,10 +32,16 @@ export default function ManageUsersClient({
   const [filterRole, setFilterRole] = useState<string>("ALL");
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [, startTransition] = useTransition();
 
   // Role badges definitions
   const roleBadges: Record<UserRole, { label: string; bg: string; text: string; icon: React.ReactNode }> = {
+    [UserRole.SUPERADMIN]: {
+      label: "SuperAdmin",
+      bg: "bg-rose-500/10 border-rose-500/20 shadow-[0_0_10px_rgba(244,63,94,0.15)]",
+      text: "text-rose-400 font-bold",
+      icon: <Crown className="w-3.5 h-3.5" />,
+    },
     [UserRole.OWNER]: {
       label: "Owner",
       bg: "bg-amber-500/10 border-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.1)]",
@@ -72,10 +78,11 @@ export default function ManageUsersClient({
             text: "User role updated successfully.",
           });
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : "Failed to update role.";
         setMessage({
           type: "error",
-          text: err.message || "Failed to update role.",
+          text: errMsg,
         });
       } finally {
         setUpdatingUserId(null);
@@ -92,8 +99,8 @@ export default function ManageUsersClient({
     return matchesSearch && matchesRole;
   });
 
-  // Check if current user is allowed to edit roles (Owner-only in Production)
-  const canEdit = isDev || currentUserRole === UserRole.OWNER;
+  // Check if current user is allowed to edit roles (SuperAdmin only in Production, anyone in Dev)
+  const canEdit = isDev || currentUserRole === UserRole.SUPERADMIN;
 
   return (
     <div className="space-y-6">
@@ -105,7 +112,7 @@ export default function ManageUsersClient({
             href="/dashboard"
             className="inline-flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors mb-2"
           >
-            <ArrowLeft className="w-3 h-3" /> Back to Dashboard
+            <ArrowLeft className="w-3 h-3" /> Back to Servers
           </Link>
           <h1 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-3">
             User Directory
@@ -116,8 +123,13 @@ export default function ManageUsersClient({
           <p className="text-xs text-zinc-400 mt-1">
             {canEdit 
               ? "Update roles and manage permissions for all registered accounts." 
-              : "Viewing directory. Role modification is locked to OWNER only in production."}
+              : "Viewing directory. Role modification is locked to SUPERADMIN only in production."}
           </p>
+          {isDev && (
+            <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-mono">
+              ⚡ Developer Mode Active: Role management unlocked for all users.
+            </div>
+          )}
         </div>
       </div>
 
@@ -168,6 +180,7 @@ export default function ManageUsersClient({
             className="w-full px-4 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-sm text-zinc-200 focus:outline-none focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700 transition-all appearance-none cursor-pointer"
           >
             <option value="ALL">All Roles</option>
+            <option value={UserRole.SUPERADMIN}>SuperAdmins</option>
             <option value={UserRole.OWNER}>Owners</option>
             <option value={UserRole.ADMIN}>Admins</option>
             <option value={UserRole.NORMUSER}>Users</option>
@@ -181,21 +194,21 @@ export default function ManageUsersClient({
       {/* Directory Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {filteredUsers.length > 0 ? (
-          filteredUsers.map((user) => {
-            const isSelf = user.id === currentUserId;
-            const badge = roleBadges[user.role];
+          filteredUsers.map((u) => {
+            const isSelf = u.id === currentUserId;
+            const badge = roleBadges[u.role] || roleBadges[UserRole.NORMUSER];
 
             return (
               <div
-                key={user.id}
+                key={u.id}
                 className="relative rounded-2xl border border-zinc-800 bg-zinc-900/40 hover:border-zinc-700 transition-all duration-300 p-5 flex flex-col justify-between gap-4 group"
               >
                 {/* User Card Top */}
                 <div className="flex items-start gap-4">
-                  {user.imageUrl ? (
+                  {u.imageUrl ? (
                     <img
-                      src={user.imageUrl}
-                      alt={user.fullName}
+                      src={u.imageUrl}
+                      alt={u.fullName}
                       className="w-12 h-12 rounded-full border border-zinc-700 object-cover"
                     />
                   ) : (
@@ -206,14 +219,14 @@ export default function ManageUsersClient({
 
                   <div className="space-y-1 min-w-0">
                     <h3 className="font-bold text-white text-base truncate flex items-center gap-2">
-                      {user.fullName}
+                      {u.fullName}
                       {isSelf && (
                         <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 text-zinc-400 rounded border border-zinc-700 font-semibold uppercase">
                           You
                         </span>
                       )}
                     </h3>
-                    <p className="text-xs text-zinc-400 truncate">{user.email}</p>
+                    <p className="text-xs text-zinc-400 truncate">{u.email}</p>
                   </div>
                 </div>
 
@@ -229,22 +242,23 @@ export default function ManageUsersClient({
                   {/* Role Selector */}
                   {canEdit && (!isSelf || isDev) ? (
                     <div className="relative">
-                      {updatingUserId === user.id ? (
+                      {updatingUserId === u.id ? (
                         <div className="flex items-center gap-1.5 text-xs text-zinc-400 font-medium py-1 px-3">
                           <Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...
                         </div>
                       ) : (
                         <select
-                          value={user.role}
-                          onChange={(e) => handleRoleChange(user.id, e.target.value as UserRole)}
+                          value={u.role}
+                          onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole)}
                           className="bg-zinc-950 border border-zinc-800 text-xs text-zinc-300 hover:text-white rounded-lg py-1 px-3 pr-8 focus:outline-none focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700 cursor-pointer appearance-none transition-all uppercase font-semibold"
                         >
                           <option value={UserRole.NORMUSER}>Make User</option>
                           <option value={UserRole.ADMIN}>Make Admin</option>
                           <option value={UserRole.OWNER}>Make Owner</option>
+                          <option value={UserRole.SUPERADMIN}>Make SuperAdmin</option>
                         </select>
                       )}
-                      {updatingUserId !== user.id && (
+                      {updatingUserId !== u.id && (
                         <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-500 text-[8px]">
                           ▼
                         </div>

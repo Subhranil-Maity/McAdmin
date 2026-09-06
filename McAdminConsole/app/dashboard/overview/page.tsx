@@ -1,7 +1,5 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import OverviewTabWrapper from "@/components/dashboard/overview-tab-wrapper";
-
-export default function DashboardOverviewPage() {
-  return <OverviewTabWrapper />;
+export default function LegacyOverviewPage() {
+  redirect("/dashboard");
 }

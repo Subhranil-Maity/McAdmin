@@ -3,15 +3,20 @@ import { ConsoleLog } from "./types";
 // Helper to simulate network latency
 export const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Helper to construct backend URL for API status
-export function getBackendStatusUrl(): string {
+// Helper to construct backend base URL
+export function getBackendBaseUrl(): string {
   let url = process.env.NEXT_PUBLIC_BACKEND_URL || "";
   if (!url) return "";
   if (!/^https?:\/\//i.test(url)) {
     url = `http://${url}`;
   }
-  url = url.replace(/\/+$/, "");
-  return `${url}/api/status`;
+  return url.replace(/\/+$/, "");
+}
+
+// Helper to construct backend URL for API status
+export function getBackendStatusUrl(): string {
+  const base = getBackendBaseUrl();
+  return base ? `${base}/api/status` : "";
 }
 
 // Utility to format uptime seconds into readable string (e.g., 5h 56m 31s or 32m 12s)

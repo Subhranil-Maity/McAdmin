@@ -14,7 +14,7 @@ export async function getPlugins(): Promise<Plugin[]> {
   return [...dummyPlugins];
 }
 
-export async function togglePluginState(pluginId: string, enabled: boolean): Promise<void> {
+export async function togglePluginState(_pluginId: string, _enabled: boolean): Promise<void> {
   await delay(100);
   // No-op dummy implementation since mock database is removed
 }

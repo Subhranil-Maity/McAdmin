@@ -1,18 +1,25 @@
 import { Player } from "./types";
-import { delay } from "./utils";
+import { delay, getBackendBaseUrl } from "./utils";
+
+interface BackendPlayer {
+  name: string;
+  uuid: string;
+  op: boolean;
+  op_level?: number;
+  whitelisted: boolean;
+  banned: boolean;
+}
 
 const dummyPlayers: Player[] = [
   { id: "Notch", username: "Notch", online: true, ping: 14, isOp: true, isWhitelisted: true, isBanned: false },
   { id: "Jeb_", username: "Jeb_", online: true, ping: 32, isOp: true, isWhitelisted: true, isBanned: false },
   { id: "Alex", username: "Alex", online: true, ping: 68, isOp: false, isWhitelisted: true, isBanned: false },
   { id: "Steve", username: "Steve", online: false, ping: 0, isOp: false, isWhitelisted: true, isBanned: false },
-  { id: "Herobrine", username: "Herobrine", online: false, ping: 0, isOp: false, isWhitelisted: false, isBanned: true },
-  { id: "Grumm", username: "Grumm", online: false, ping: 0, isOp: false, isWhitelisted: false, isBanned: false },
 ];
 
-export async function getServerPlayers(): Promise<Player[]> {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
-  if (!backendUrl) {
+export async function getServerPlayers(instanceId?: string): Promise<Player[]> {
+  const base = getBackendBaseUrl();
+  if (!base) {
     await delay(100);
     return [...dummyPlayers].sort((a, b) => {
       if (a.online === b.online) return a.username.localeCompare(b.username);
@@ -20,23 +27,26 @@ export async function getServerPlayers(): Promise<Player[]> {
     });
   }
 
-  let base = backendUrl;
-  if (!/^https?:\/\//i.test(base)) {
-    base = `http://${base}`;
-  }
-  base = base.replace(/\/+$/, "");
+  const endpoint = instanceId
+    ? `${base}/api/instances/${encodeURIComponent(instanceId)}/players`
+    : `${base}/api/server/players`;
 
   try {
-    const playersRes = await fetch(`${base}/api/server/players`, { cache: "no-store", credentials: "include" });
+    const playersRes = await fetch(endpoint, { cache: "no-store", credentials: "include" });
     if (!playersRes.ok) {
       throw new Error(`Failed to fetch players: status ${playersRes.status}`);
     }
     const playersData = await playersRes.json();
-    const allPlayersList: any[] = playersData.players || [];
+    const allPlayersList: BackendPlayer[] = Array.isArray(playersData.players)
+      ? playersData.players
+      : [];
 
     let onlineUsernames: string[] = [];
     try {
-      const onlineRes = await fetch(`${base}/api/server/players/online`, { cache: "no-store", credentials: "include" });
+      const onlineEndpoint = instanceId
+        ? `${base}/api/instances/${encodeURIComponent(instanceId)}/players/online`
+        : `${base}/api/server/players/online`;
+      const onlineRes = await fetch(onlineEndpoint, { cache: "no-store", credentials: "include" });
       if (onlineRes.ok) {
         const onlineData = await onlineRes.json();
         if (Array.isArray(onlineData)) {
@@ -45,7 +55,7 @@ export async function getServerPlayers(): Promise<Player[]> {
           onlineUsernames = onlineData.players;
         }
       }
-    } catch (e) {
+    } catch {
       // Server offline/starting, online list empty
     }
 
@@ -64,7 +74,6 @@ export async function getServerPlayers(): Promise<Player[]> {
       };
     });
 
-    // Dynamically append online players who are not in the known offline cache database
     onlineUsernames.forEach((name) => {
       if (name && !allPlayersMap.has(name.toLowerCase())) {
         mappedPlayers.push({
@@ -91,47 +100,54 @@ export async function getServerPlayers(): Promise<Player[]> {
 
 export async function updatePlayerStatus(
   playerId: string,
-  action: "kick" | "ban" | "unban" | "op" | "deop" | "whitelist" | "dewhitelist"
+  action: "kick" | "ban" | "unban" | "op" | "deop" | "whitelist" | "dewhitelist",
+  instanceId?: string
 ): Promise<void> {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
-  if (!backendUrl) {
+  const base = getBackendBaseUrl();
+  if (!base) {
     await delay(150);
     return;
   }
 
-  let base = backendUrl;
-  if (!/^https?:\/\//i.test(base)) {
-    base = `http://${base}`;
-  }
-  base = base.replace(/\/+$/, "");
-
   let endpoint = "";
-  let body: any = { player: playerId };
+  let body: Record<string, unknown> = { player: playerId };
 
-  switch (action) {
-    case "kick":
-      endpoint = `${base}/api/server/command`;
+  if (instanceId) {
+    if (action === "kick") {
+      endpoint = `${base}/api/instances/${encodeURIComponent(instanceId)}/command`;
       body = { command: `kick ${playerId}` };
-      break;
-    case "ban":
-      endpoint = `${base}/api/server/players/ban`;
-      body = { player: playerId, reason: "Banned by administrator" };
-      break;
-    case "unban":
-      endpoint = `${base}/api/server/players/unban`;
-      break;
-    case "op":
-      endpoint = `${base}/api/server/players/op`;
-      break;
-    case "deop":
-      endpoint = `${base}/api/server/players/deop`;
-      break;
-    case "whitelist":
-      endpoint = `${base}/api/server/players/whitelist`;
-      break;
-    case "dewhitelist":
-      endpoint = `${base}/api/server/players/dewhitelist`;
-      break;
+    } else {
+      endpoint = `${base}/api/instances/${encodeURIComponent(instanceId)}/players/${action}`;
+      if (action === "ban") {
+        body = { player: playerId, reason: "Banned by administrator" };
+      }
+    }
+  } else {
+    switch (action) {
+      case "kick":
+        endpoint = `${base}/api/server/command`;
+        body = { command: `kick ${playerId}` };
+        break;
+      case "ban":
+        endpoint = `${base}/api/server/players/ban`;
+        body = { player: playerId, reason: "Banned by administrator" };
+        break;
+      case "unban":
+        endpoint = `${base}/api/server/players/unban`;
+        break;
+      case "op":
+        endpoint = `${base}/api/server/players/op`;
+        break;
+      case "deop":
+        endpoint = `${base}/api/server/players/deop`;
+        break;
+      case "whitelist":
+        endpoint = `${base}/api/server/players/whitelist`;
+        break;
+      case "dewhitelist":
+        endpoint = `${base}/api/server/players/dewhitelist`;
+        break;
+    }
   }
 
   const res = await fetch(endpoint, {

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useTransition, useRef } from "react";
+import React, { createContext, useContext, useState, useEffect, useRef } from "react";
 import { UserRole } from "@/types/roles";
 import {
   getServerStatus,
@@ -14,15 +14,23 @@ import {
   togglePluginState,
   toggleServerPower,
   updatePlayerStatus,
+  listInstances,
+  getInstance,
   ServerStatus,
   ConsoleLog,
   Player,
   WhitelistEntry,
   Plugin,
   CommandResponse,
+  InstanceSummary,
+  InstanceDetail,
 } from "@/lib/mc-server";
 
 interface DashboardContextType {
+  instanceId?: string;
+  instanceDetail: InstanceDetail | null;
+  allInstances: InstanceSummary[];
+  refreshAllInstances: () => Promise<void>;
   userRole: UserRole;
   isDev: boolean;
   isPhysicalServerOnline: boolean;
@@ -45,7 +53,6 @@ interface DashboardContextType {
   setLastCommandResponse: React.Dispatch<React.SetStateAction<CommandResponse | null>>;
 
   // Loaders
-  isPending: boolean;
   powerActionLoading: string | null;
   whitelistLoading: boolean;
   actionPlayerId: string | null;
@@ -71,11 +78,16 @@ export function DashboardProvider({
   children,
   userRole,
   isDev,
+  instanceId,
 }: {
   children: React.ReactNode;
   userRole: UserRole;
   isDev: boolean;
+  instanceId?: string;
 }) {
+  const [instanceDetail, setInstanceDetail] = useState<InstanceDetail | null>(null);
+  const [allInstances, setAllInstances] = useState<InstanceSummary[]>([]);
+
   // Server Data States
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [isPhysicalServerOnline, setIsPhysicalServerOnline] = useState(true);
@@ -92,24 +104,39 @@ export function DashboardProvider({
   const [lastCommandResponse, setLastCommandResponse] = useState<CommandResponse | null>(null);
 
   // Loaders
-  const [isPending, startTransition] = useTransition();
   const [powerActionLoading, setPowerActionLoading] = useState<string | null>(null);
   const [whitelistLoading, setWhitelistLoading] = useState(false);
   const [actionPlayerId, setActionPlayerId] = useState<string | null>(null);
 
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
+  const refreshAllInstances = async () => {
+    try {
+      const list = await listInstances();
+      setAllInstances(list);
+    } catch (e) {
+      console.error("Failed to load instances list:", e);
+    }
+  };
+
   // Initial Load
   useEffect(() => {
     async function loadData() {
       try {
-        const [stat, initialLogs, initialPlayers, initialWhitelist, initialPlugins] = await Promise.all([
-          getServerStatus(),
-          getConsoleLogs(),
-          getServerPlayers(),
-          getWhitelist(),
-          getPlugins(),
-        ]);
+        refreshAllInstances();
+
+        if (instanceId) {
+          getInstance(instanceId).then(setInstanceDetail).catch(console.error);
+        }
+
+        const [stat, initialLogs, initialPlayers, initialWhitelist, initialPlugins] =
+          await Promise.all([
+            getServerStatus(instanceId),
+            getConsoleLogs(instanceId),
+            getServerPlayers(instanceId),
+            getWhitelist(instanceId),
+            getPlugins(),
+          ]);
 
         setStatus(stat);
         setLogs(initialLogs);
@@ -131,13 +158,13 @@ export function DashboardProvider({
       }
     }
     loadData();
-  }, []);
+  }, [instanceId]);
 
-  // Periodic RAM and CPU Polling (2.5 seconds interval)
+  // Periodic RAM, CPU, and logs Polling (2.5 seconds interval)
   useEffect(() => {
     const timer = setInterval(async () => {
       try {
-        const latestStatus = await getServerStatus();
+        const latestStatus = await getServerStatus(instanceId);
         setStatus(latestStatus);
 
         if (latestStatus.isReachable === false) {
@@ -149,8 +176,8 @@ export function DashboardProvider({
           consecutiveFailuresRef.current = 0;
           setIsPhysicalServerOnline(true);
         }
-        
-        const latestLogs = await getConsoleLogs();
+
+        const latestLogs = await getConsoleLogs(instanceId);
         setLogs(latestLogs);
       } catch (err) {
         console.error("Polling error:", err);
@@ -162,7 +189,7 @@ export function DashboardProvider({
     }, 2500);
 
     return () => clearInterval(timer);
-  }, []);
+  }, [instanceId]);
 
   // Power Actions Handler
   const handlePowerAction = async (action: "start" | "stop" | "restart") => {
@@ -175,19 +202,17 @@ export function DashboardProvider({
 
     setPowerActionLoading(action);
     try {
-      // Optimistic state updates
       if (action === "start") {
-        setStatus((prev) => prev ? { ...prev, status: "STARTING" } : null);
+        setStatus((prev) => (prev ? { ...prev, status: "STARTING" } : null));
       } else if (action === "stop") {
-        setStatus((prev) => prev ? { ...prev, status: "OFFLINE", cpu: 0, ramUsed: 0 } : null);
+        setStatus((prev) => (prev ? { ...prev, status: "OFFLINE", cpu: 0, ramUsed: 0 } : null));
       } else if (action === "restart") {
-        setStatus((prev) => prev ? { ...prev, status: "STARTING" } : null);
+        setStatus((prev) => (prev ? { ...prev, status: "STARTING" } : null));
       }
 
-      await toggleServerPower(action);
-      
-      // Post-transition reload
-      const updatedStatus = await getServerStatus();
+      await toggleServerPower(action, instanceId);
+
+      const updatedStatus = await getServerStatus(instanceId);
       setStatus(updatedStatus);
 
       if (updatedStatus.isReachable === false) {
@@ -200,10 +225,11 @@ export function DashboardProvider({
         setIsPhysicalServerOnline(true);
       }
 
-      const updatedLogs = await getConsoleLogs();
+      const updatedLogs = await getConsoleLogs(instanceId);
       setLogs(updatedLogs);
-      const updatedPlayers = await getServerPlayers();
+      const updatedPlayers = await getServerPlayers(instanceId);
       setPlayers(updatedPlayers);
+      refreshAllInstances();
     } catch (err) {
       console.error(`Failed to ${action} server:`, err);
     } finally {
@@ -219,11 +245,11 @@ export function DashboardProvider({
     const cmd = commandInput;
     setCommandInput("");
     try {
-      const res = await sendConsoleCommand(cmd);
+      const res = await sendConsoleCommand(cmd, instanceId);
       setLastCommandResponse(res);
-      const updatedLogs = await getConsoleLogs();
+      const updatedLogs = await getConsoleLogs(instanceId);
       setLogs(updatedLogs);
-      const updatedPlayers = await getServerPlayers();
+      const updatedPlayers = await getServerPlayers(instanceId);
       setPlayers(updatedPlayers);
     } catch (err) {
       console.error("Failed to run console command:", err);
@@ -237,13 +263,13 @@ export function DashboardProvider({
 
     setWhitelistLoading(true);
     try {
-      await addWhitelist(newWhitelistName);
+      await addWhitelist(newWhitelistName, instanceId);
       setNewWhitelistName("");
-      const updatedList = await getWhitelist();
+      const updatedList = await getWhitelist(instanceId);
       setWhitelist(updatedList);
-      const updatedPlayers = await getServerPlayers();
+      const updatedPlayers = await getServerPlayers(instanceId);
       setPlayers(updatedPlayers);
-      const updatedLogs = await getConsoleLogs();
+      const updatedLogs = await getConsoleLogs(instanceId);
       setLogs(updatedLogs);
     } catch (err) {
       console.error("Failed to add to whitelist:", err);
@@ -254,12 +280,12 @@ export function DashboardProvider({
 
   const handleRemoveWhitelist = async (id: string) => {
     try {
-      await removeWhitelist(id);
-      const updatedList = await getWhitelist();
+      await removeWhitelist(id, instanceId);
+      const updatedList = await getWhitelist(instanceId);
       setWhitelist(updatedList);
-      const updatedPlayers = await getServerPlayers();
+      const updatedPlayers = await getServerPlayers(instanceId);
       setPlayers(updatedPlayers);
-      const updatedLogs = await getConsoleLogs();
+      const updatedLogs = await getConsoleLogs(instanceId);
       setLogs(updatedLogs);
     } catch (err) {
       console.error("Failed to remove from whitelist:", err);
@@ -268,10 +294,10 @@ export function DashboardProvider({
 
   // Plugin Handler
   const handleTogglePlugin = async (pluginId: string, enabled: boolean) => {
-    setPlugins((prev) => prev.map((p) => p.id === pluginId ? { ...p, enabled } : p));
+    setPlugins((prev) => prev.map((p) => (p.id === pluginId ? { ...p, enabled } : p)));
     try {
       await togglePluginState(pluginId, enabled);
-      const updatedLogs = await getConsoleLogs();
+      const updatedLogs = await getConsoleLogs(instanceId);
       setLogs(updatedLogs);
     } catch (err) {
       console.error("Failed to toggle plugin:", err);
@@ -285,12 +311,12 @@ export function DashboardProvider({
   ) => {
     setActionPlayerId(playerId);
     try {
-      await updatePlayerStatus(playerId, action);
-      const updatedPlayers = await getServerPlayers();
+      await updatePlayerStatus(playerId, action, instanceId);
+      const updatedPlayers = await getServerPlayers(instanceId);
       setPlayers(updatedPlayers);
-      const updatedWhitelist = await getWhitelist();
+      const updatedWhitelist = await getWhitelist(instanceId);
       setWhitelist(updatedWhitelist);
-      const updatedLogs = await getConsoleLogs();
+      const updatedLogs = await getConsoleLogs(instanceId);
       setLogs(updatedLogs);
     } catch (err) {
       console.error(`Failed player action ${action}:`, err);
@@ -303,6 +329,10 @@ export function DashboardProvider({
   return (
     <DashboardContext.Provider
       value={{
+        instanceId,
+        instanceDetail,
+        allInstances,
+        refreshAllInstances,
         userRole,
         isDev,
         status,
@@ -319,7 +349,6 @@ export function DashboardProvider({
         setPlayerSearch,
         lastCommandResponse,
         setLastCommandResponse,
-        isPending,
         powerActionLoading,
         whitelistLoading,
         actionPlayerId,

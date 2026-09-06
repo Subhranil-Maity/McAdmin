@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
+import { useDashboard } from "./dashboard-context";
 
 // Helper function to normalize and retrieve backend API URL
 const getBackendUrl = () => {
@@ -18,6 +19,7 @@ const getBackendUrl = () => {
 };
 
 export default function PropertiesTab() {
+  const { instanceId } = useDashboard();
   const [properties, setProperties] = useState<Record<string, string>>({});
   const [editedProperties, setEditedProperties] = useState<Record<string, string>>({});
   const [propertySearch, setPropertySearch] = useState("");
@@ -32,7 +34,10 @@ export default function PropertiesTab() {
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      const res = await fetch(`${getBackendUrl()}/api/server/properties`, { credentials: "include" });
+      const endpoint = instanceId
+        ? `${getBackendUrl()}/api/instances/${encodeURIComponent(instanceId)}/properties`
+        : `${getBackendUrl()}/api/server/properties`;
+      const res = await fetch(endpoint, { credentials: "include" });
       if (!res.ok) {
         throw new Error(`Server returned status: ${res.status}`);
       }
@@ -74,7 +79,10 @@ export default function PropertiesTab() {
 
     setIsSaving(true);
     try {
-      const res = await fetch(`${getBackendUrl()}/api/server/properties`, {
+      const endpoint = instanceId
+        ? `${getBackendUrl()}/api/instances/${encodeURIComponent(instanceId)}/properties`
+        : `${getBackendUrl()}/api/server/properties`;
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

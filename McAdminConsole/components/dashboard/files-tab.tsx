@@ -38,9 +38,10 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { useDashboard } from "./dashboard-context";
 import {
   listServerFiles,
   getServerFileContent,
@@ -70,7 +71,7 @@ function formatTime(isoString: string) {
       hour: "2-digit",
       minute: "2-digit",
     });
-  } catch (e) {
+  } catch {
     return isoString;
   }
 }
@@ -127,6 +128,7 @@ function LineNumberedTextArea({ value, onChange, disabled }: LineNumberedTextAre
 }
 
 export default function FilesTab() {
+  const { instanceId } = useDashboard();
   const [currentPath, setCurrentPath] = useState<string>("/");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -189,7 +191,7 @@ export default function FilesTab() {
     const parentPath = dirPath === "/" ? "" : dirPath;
     const filePath = `${parentPath}/${filename}`;
     try {
-      const fileData = await getServerFileContent(filePath);
+      const fileData = await getServerFileContent(filePath, instanceId);
       setEditingFile({
         path: fileData.path,
         filename: filename,
@@ -210,7 +212,7 @@ export default function FilesTab() {
     setLoading(true);
     setError(null);
     try {
-      const data = await listServerFiles(path);
+      const data = await listServerFiles(path, instanceId);
       // Sort: dirs first, then files alphabetically
       const sorted = [...data.entries].sort((a, b) => {
         if (a.type === "dir" && b.type !== "dir") return -1;
@@ -252,7 +254,7 @@ export default function FilesTab() {
         fetchFiles(pathParam);
       }
     }
-  }, []);
+  }, [instanceId]);
 
   // Listen to popstate for proper back/forward browser navigation
   useEffect(() => {
@@ -339,7 +341,7 @@ export default function FilesTab() {
     setSaving(true);
     setErrorMsg(null);
     try {
-      await writeServerFileContent(editingFile.path, editingFile.content, saveForce);
+      await writeServerFileContent(editingFile.path, editingFile.content, saveForce, instanceId);
       showSuccess(`File '${editingFile.filename}' saved successfully.`);
       // Fetch latest list state
       fetchFiles(currentPath);
@@ -356,7 +358,7 @@ export default function FilesTab() {
     const parentPath = currentPath === "/" ? "" : currentPath;
     const filePath = `${parentPath}/${entry.name}`;
     try {
-      const fileData = await getServerFileContent(filePath);
+      const fileData = await getServerFileContent(filePath, instanceId);
       const blob = new Blob([fileData.content], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -398,7 +400,7 @@ export default function FilesTab() {
     try {
       await uploadServerFile(destPath, file, true, (progress) => {
         setUploadProgress(progress);
-      });
+      }, instanceId);
       showSuccess(`File '${file.name}' uploaded successfully.`);
       fetchFiles(currentPath);
     } catch (err) {
@@ -419,7 +421,7 @@ export default function FilesTab() {
     const filePath = `${parentPath}/${cleanName}`;
 
     try {
-      await writeServerFileContent(filePath, "", newFileForce);
+      await writeServerFileContent(filePath, "", newFileForce, instanceId);
       setIsCreatingFile(false);
       setNewFileName("");
       setNewFileForce(false);
