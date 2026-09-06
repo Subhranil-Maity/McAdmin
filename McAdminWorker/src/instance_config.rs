@@ -24,6 +24,8 @@ pub struct InstanceConfig {
     pub rcon_password: String,
     #[serde(default = "default_ram_gb")]
     pub ram_gb: u32,
+    #[serde(default, alias = "version")]
+    pub minecraft_version: Option<String>,
     pub created_at: String,
     #[serde(default)]
     pub owner_id: Option<String>,
@@ -141,6 +143,40 @@ impl McConfigManager {
         let mut lock = self.config.lock().await;
         if let Some(instance) = lock.instances.iter_mut().find(|i| i.id == id) {
             instance.admins = admins;
+            let updated = instance.clone();
+            Self::save_locked(&self.path, &lock).await?;
+            Ok(Some(updated))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn update_instance_config(
+        &self,
+        id: &str,
+        ram_gb: Option<u32>,
+        minecraft_version: Option<String>,
+        name: Option<String>,
+    ) -> io::Result<Option<InstanceConfig>> {
+        let mut lock = self.config.lock().await;
+        if let Some(instance) = lock.instances.iter_mut().find(|i| i.id == id) {
+            if let Some(ram) = ram_gb {
+                instance.ram_gb = ram;
+            }
+            if let Some(ver) = minecraft_version {
+                let trimmed = ver.trim();
+                instance.minecraft_version = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                };
+            }
+            if let Some(n) = name {
+                let trimmed = n.trim();
+                if !trimmed.is_empty() {
+                    instance.name = trimmed.to_string();
+                }
+            }
             let updated = instance.clone();
             Self::save_locked(&self.path, &lock).await?;
             Ok(Some(updated))

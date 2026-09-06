@@ -30,6 +30,7 @@ pub struct InstanceSummary {
     pub server_port: u16,
     pub rcon_port: u16,
     pub ram_gb: u32,
+    pub minecraft_version: Option<String>,
     pub created_at: String,
     pub owner_id: Option<String>,
     pub admins: Vec<String>,
@@ -51,7 +52,16 @@ pub struct InstanceStatusResponse {
     pub uptime_seconds: u64,
     pub active_players: u32,
     pub max_players: u32,
+    pub minecraft_version: Option<String>,
     pub recent_logs: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateInstanceRequest {
+    pub ram_gb: Option<u32>,
+    #[serde(alias = "version")]
+    pub minecraft_version: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -173,6 +183,7 @@ pub async fn list_instances(
             server_port: runtime.config.server_port,
             rcon_port: runtime.config.rcon_port,
             ram_gb: runtime.config.ram_gb,
+            minecraft_version: runtime.config.minecraft_version.clone(),
             created_at: runtime.config.created_at.clone(),
             owner_id: runtime.config.owner_id.clone(),
             admins: runtime.config.admins.clone(),
@@ -193,6 +204,7 @@ pub async fn create_instance(
 ) -> Result<(StatusCode, Json<InstanceConfig>), StatusCode> {
     let mut name = None;
     let mut ram_gb = 2u32;
+    let mut minecraft_version = None;
     let mut server_port = None;
     let mut rcon_port = None;
     let mut jar_data = None;
@@ -206,6 +218,14 @@ pub async fn create_instance(
         match field_name.as_str() {
             "name" => {
                 name = Some(field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?);
+            }
+            "minecraft_version" | "version" => {
+                if let Ok(text) = field.text().await {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        minecraft_version = Some(trimmed.to_string());
+                    }
+                }
             }
             "ram_gb" => {
                 if let Ok(text) = field.text().await {
@@ -245,6 +265,7 @@ pub async fn create_instance(
         .create_instance(
             name,
             ram_gb,
+            minecraft_version,
             server_port,
             rcon_port,
             &jar_data,
@@ -311,7 +332,7 @@ pub async fn get_instance_status(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let (status_str, process_id, server_port, rcon_port, ram_gb, name, recent_logs) = {
+    let (status_str, process_id, server_port, rcon_port, ram_gb, name, minecraft_version, recent_logs) = {
         let runtime = runtime_arc.lock().await;
         (
             runtime.state.as_str().to_string(),
@@ -320,6 +341,7 @@ pub async fn get_instance_status(
             runtime.config.rcon_port,
             runtime.config.ram_gb,
             runtime.config.name.clone(),
+            runtime.config.minecraft_version.clone(),
             runtime.logs.get_last_n(RECENT_LOG_LINES),
         )
     };
@@ -373,6 +395,7 @@ pub async fn get_instance_status(
         uptime_seconds,
         active_players,
         max_players,
+        minecraft_version,
         recent_logs,
     }))
 }
@@ -494,6 +517,52 @@ pub async fn update_instance_admins(
     if let Some(runtime_arc) = state.instance_manager.get(&id).await {
         let mut runtime = runtime_arc.lock().await;
         runtime.config.admins = updated.admins.clone();
+    }
+
+    Ok(Json(updated))
+}
+
+pub async fn update_instance(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(user): Extension<AuthUser>,
+    Json(payload): Json<UpdateInstanceRequest>,
+) -> Result<Json<InstanceConfig>, StatusCode> {
+    let config = state
+        .config_manager
+        .get_instance(&id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if !user.can_manage_instance(&config) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    if let Some(ram) = payload.ram_gb {
+        if ram == 0 || ram > 256 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    let trimmed_version = payload.minecraft_version.map(|v| v.trim().to_string());
+
+    let updated = state
+        .config_manager
+        .update_instance_config(
+            &id,
+            payload.ram_gb,
+            trimmed_version,
+            payload.name,
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if let Some(runtime_arc) = state.instance_manager.get(&id).await {
+        let mut runtime = runtime_arc.lock().await;
+        runtime.config.ram_gb = updated.ram_gb;
+        runtime.config.minecraft_version = updated.minecraft_version.clone();
+        runtime.config.name = updated.name.clone();
     }
 
     Ok(Json(updated))

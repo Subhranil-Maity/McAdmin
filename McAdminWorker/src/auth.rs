@@ -1,6 +1,4 @@
-#![allow(unused)]
-
-use axum::{extract::Request, response::Response};
+use axum::{body::Body, extract::Request, http::StatusCode, response::Response};
 use clerk_rs::{
     ClerkConfiguration,
     apis::users_api::User as UsersApi,
@@ -127,15 +125,98 @@ where
 
     fn call(&mut self, mut request: Request) -> Self::Future {
         let path = request.uri().path().to_owned();
-        info!("Handling request on {path} (auth validation bypassed)");
 
-        request.extensions_mut().insert(AuthUser {
-            user_id: "dev_user".to_string(),
-            role: "superadmin".to_string(),
-        });
+        if request.method() == axum::http::Method::OPTIONS || self.public_paths.contains(path.as_str()) {
+            let mut inner = self.inner.clone();
+            return Box::pin(async move { inner.call(request).await });
+        }
 
+        let auth_header = request
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_owned());
+
+        let token = match auth_header {
+            Some(header) => header.strip_prefix("Bearer ").unwrap_or(&header).to_owned(),
+            None => {
+                let cookie_token = request
+                    .headers()
+                    .get("cookie")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(parse_session_cookie);
+
+                match cookie_token {
+                    Some(t) => t,
+                    None => {
+                        warn!(
+                            "auth rejected on {path}: no Authorization header and no __session cookie"
+                        );
+                        return Box::pin(async {
+                            Ok(Response::builder()
+                                .status(StatusCode::UNAUTHORIZED)
+                                .body(Body::from("Missing Authorization header or session cookie"))
+                                .unwrap())
+                        });
+                    }
+                }
+            }
+        };
+
+        let jwks_provider = self.jwks_provider.clone();
+        let clerk = self.clerk.clone();
+        let role_cache = self.role_cache.clone();
         let mut inner = self.inner.clone();
+
         Box::pin(async move {
+            let jwt = match validate_jwt(&token, jwks_provider).await {
+                Ok(jwt) => jwt,
+                Err(e) => {
+                    warn!("auth rejected on {path}: JWT validation failed: {e}");
+                    return Ok(Response::builder()
+                        .status(StatusCode::UNAUTHORIZED)
+                        .body(Body::from("Invalid or expired token"))
+                        .unwrap());
+                }
+            };
+
+            let role = match role_cache.get(&jwt.sub).await {
+                Some((role, ttl)) => {
+                    info!(
+                        "role cache hit for user={}: role={role} ttl={:.0}s",
+                        jwt.sub,
+                        ttl.as_secs_f64()
+                    );
+                    role
+                }
+                None => {
+                    info!("role cache miss for user={}", jwt.sub);
+                    let user = match UsersApi::get_user(&clerk, &jwt.sub).await {
+                        Ok(user) => user,
+                        Err(e) => {
+                            warn!(
+                                "auth rejected on {path}: failed to fetch user {}: {e}",
+                                jwt.sub
+                            );
+                            return Ok(Response::builder()
+                                .status(StatusCode::UNAUTHORIZED)
+                                .body(Body::from("Failed to fetch user"))
+                                .unwrap());
+                        }
+                    };
+
+                    let role = extract_user_role(&user);
+                    role_cache.insert(&jwt.sub, &role).await;
+                    role
+                }
+            };
+
+            info!("auth OK on {path}: user={} role={role}", jwt.sub);
+            request.extensions_mut().insert(AuthUser {
+                user_id: jwt.sub.clone(),
+                role: role.clone(),
+            });
+            request.extensions_mut().insert(jwt);
             inner.call(request).await
         })
     }

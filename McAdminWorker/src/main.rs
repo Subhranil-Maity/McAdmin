@@ -10,13 +10,14 @@ use api::instances::{
     command_instance, create_instance, delete_instance, get_instance, get_instance_file_content,
     get_instance_online_players, get_instance_players, get_instance_properties, get_instance_status,
     instance_player_action, list_instance_files, list_instances, start_instance, stop_instance,
-    update_instance_admins, update_instance_properties, upload_instance_file, write_instance_file,
+    update_instance, update_instance_admins, update_instance_properties, upload_instance_file,
+    write_instance_file,
 };
 use auth::ClerkAuthLayer;
 use axum::{
     Router,
-    http::{HeaderValue, Method, request::Parts},
-    routing::{delete, get, post},
+    http::Method,
+    routing::{get, patch, post},
 };
 use instance_config::McConfigManager;
 use instance_manager::InstanceManager;
@@ -26,7 +27,7 @@ use std::sync::Arc;
 use sysinfo::System;
 use tokio::sync::Mutex as TokioMutex;
 use tower_http::{
-    cors::{AllowOrigin, CorsLayer},
+    cors::{AllowHeaders, AllowOrigin, CorsLayer},
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
 use tracing::{Level, info};
@@ -89,8 +90,17 @@ async fn main() {
             "/api/instances",
             post(create_instance).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024)),
         )
-        .route("/api/instances/{id}", get(get_instance))
-        .route("/api/instances/{id}", delete(delete_instance))
+        .route(
+            "/api/instances/{id}",
+            get(get_instance)
+                .patch(update_instance)
+                .post(update_instance)
+                .delete(delete_instance),
+        )
+        .route(
+            "/api/instances/{id}/config",
+            patch(update_instance).post(update_instance),
+        )
         .route("/api/instances/{id}/status", get(get_instance_status))
         .route("/api/instances/{id}/start", post(start_instance))
         .route("/api/instances/{id}/stop", post(stop_instance))
@@ -144,9 +154,7 @@ async fn main() {
 
 fn cors_layer() -> CorsLayer {
     CorsLayer::new()
-        .allow_origin(AllowOrigin::predicate(
-            |origin: &HeaderValue, _request_parts: &Parts| is_local_origin(origin),
-        ))
+        .allow_origin(AllowOrigin::mirror_request())
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -155,14 +163,6 @@ fn cors_layer() -> CorsLayer {
             Method::PATCH,
             Method::OPTIONS,
         ])
-        .allow_headers(tower_http::cors::AllowHeaders::mirror_request())
+        .allow_headers(AllowHeaders::mirror_request())
         .allow_credentials(true)
-}
-
-fn is_local_origin(origin: &HeaderValue) -> bool {
-    let Ok(origin) = origin.to_str() else {
-        return false;
-    };
-
-    origin.starts_with("http://") || origin.starts_with("https://")
 }
