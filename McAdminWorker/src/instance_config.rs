@@ -26,6 +26,8 @@ pub struct InstanceConfig {
     pub ram_gb: u32,
     #[serde(default, alias = "version")]
     pub minecraft_version: Option<String>,
+    #[serde(default)]
+    pub java_runtime: Option<String>,
     pub created_at: String,
     #[serde(default)]
     pub owner_id: Option<String>,
@@ -157,6 +159,7 @@ impl McConfigManager {
         ram_gb: Option<u32>,
         minecraft_version: Option<String>,
         name: Option<String>,
+        java_runtime: Option<String>,
     ) -> io::Result<Option<InstanceConfig>> {
         let mut lock = self.config.lock().await;
         if let Some(instance) = lock.instances.iter_mut().find(|i| i.id == id) {
@@ -176,6 +179,14 @@ impl McConfigManager {
                 if !trimmed.is_empty() {
                     instance.name = trimmed.to_string();
                 }
+            }
+            if let Some(jr) = java_runtime {
+                let trimmed = jr.trim();
+                instance.java_runtime = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                };
             }
             let updated = instance.clone();
             Self::save_locked(&self.path, &lock).await?;

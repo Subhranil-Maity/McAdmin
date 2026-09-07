@@ -1,6 +1,6 @@
 # mc_admin_worker
 
-Rust/Axum service for managing multi-instance Minecraft servers with isolated runtimes, automated port allocation, Clerk authentication, and hardware resource controls.
+Rust/Axum service for managing multi-instance Minecraft servers with isolated runtimes, automated port allocation, in-house JWT authentication, separate role storage, Java runtime management, and hardware resource controls.
 
 ## Runtime & Environment
 
@@ -10,9 +10,12 @@ Rust/Axum service for managing multi-instance Minecraft servers with isolated ru
   - `ADMIN_WORKER_PORT`: HTTP port to listen on (e.g. `8000`).
   - `HOME_DIR`: Root working directory where instance folders and configs are stored.
   - `RCON_HOST`: IP/host for RCON connections (e.g. `127.0.0.1`).
-  - `CLERK_SECRET_KEY`: Clerk secret key for JWT verification and user role queries.
+  - `JWT_SECRET`: Optional HMAC-SHA256 JWT signing key (defaults to internal fallback if unset).
 - Binds HTTP server on `${ADMIN_WORKER_HOST}:${ADMIN_WORKER_PORT}`.
 - Global master configuration is stored in `${HOME_DIR}/mc_config.json`.
+- Global user store is stored in `${HOME_DIR}/users.json`.
+- Instance-specific access roles are stored in `${HOME_DIR}/roles.json`.
+- Java runtimes and executable paths are stored in `${HOME_DIR}/java_runtimes.json`.
 - Server instances reside in `${HOME_DIR}/instances/<instance_id>/`.
 
 ## CORS Policy
@@ -23,17 +26,30 @@ Rust/Axum service for managing multi-instance Minecraft servers with isolated ru
   - `allow_credentials`: `true`.
   - `allow_methods`: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `OPTIONS`, `HEAD`.
 
-## Authentication & Permissions
+## Authentication & Authorization (In-House)
 
-- `ClerkAuthLayer` middleware validates incoming requests:
-  - `OPTIONS` preflight requests and `GET /` (health check) are public and bypass authentication.
-  - All other routes require authentication via `Authorization: Bearer <token>` or `__session` cookie.
-  - JWT tokens are cryptographically verified using Clerk's JWKS public keys (`clerk_rs::validators::jwks::JwksProvider`).
-  - Upon token validation, the user's role is queried from Clerk Backend API (`GET /users/{user_id}`) and cached in-memory for 60 minutes.
-- Roles and Instance Permissions:
-  - `superadmin`: Role in Clerk `public_metadata.role == "superadmin"` or `"owner"`. Has access to all instances and operations.
-  - `owner` (`owner_id`): Creator/owner of the instance. Can delete instances, manage admins, edit configs, and control runtime.
-  - `admin` (`admins` list): Assigned instance admin. Can manage server lifecycle (start/stop), execute commands, edit properties/files, and update RAM / version configuration.
+- `JwtAuthLayer` middleware validates incoming requests:
+  - `OPTIONS` preflight requests, `GET /`, `GET /api/auth/health`, `POST /api/auth/register`, and `POST /api/auth/login` are public and bypass authentication.
+  - All other routes require authentication via `Authorization: Bearer <token>` or `mcadmin_token` cookie.
+  - Passwords are securely hashed with Argon2id.
+  - The first registered user is automatically bootstrapped with `is_superuser = true`.
+- Global Roles & Permissions (`users.json`):
+  - `is_superuser: bool`: Omnipotent access across all instances and user administration (`/api/users`).
+  - `permissions: { can_create_server: bool }`: Controls server creation rights.
+- Instance-Specific Roles (`roles.json`):
+  - Completely decoupled from `users.json`. Stored per instance (`owner_id`, `admins: []`, `users: []`).
+  - `owner`: Can delete instances, manage admins, transfer ownership, and update configurations.
+  - `admin`: Can start/stop servers, send commands, edit files/properties, and adjust RAM/version/Java.
+  - `user`: Can view instance status, players, and console logs.
+
+## Java Runtime Management (`java_runtimes.json`)
+
+Managed by `JavaManager`:
+- Stored in `${HOME_DIR}/java_runtimes.json`.
+- If the file is missing or empty, the backend scans `/usr/lib/jvm`, `/opt/java`, `/usr/java`, and `PATH`, probes versions with `-version`, and generates the initial config.
+- Users can manually add, edit, or remove custom JVM paths in `java_runtimes.json` anytime.
+- Each Minecraft instance config can set `java_runtime` (referencing an ID or custom binary path).
+- When starting an instance, `InstanceManager` resolves `java_runtime` to the target executable, falling back to the default configured runtime or `PATH` `java`.
 
 ## Master Config (`mc_config.json`)
 
@@ -66,22 +82,38 @@ Managed by `McConfigManager`:
 
 ## HTTP API Endpoints
 
-### Health Check
+### Health Check & Auth
 - `GET /`: Health check endpoint. Returns `OK`. **Public (no auth).**
+- `GET /api/auth/health`: In-house auth system status. **Public (no auth).**
+- `POST /api/auth/register`: Register user account. First account gets superuser. **Public (no auth).**
+- `POST /api/auth/login`: Authenticate and return JWT token and user info. **Public (no auth).**
+- `GET /api/auth/me`: Current authenticated user session details.
+
+### Java Runtime Management
+- `GET /api/java-runtimes`: Lists configured Java runtimes with detection status and validation.
+- `POST /api/java-runtimes/scan`: Triggers host system scan to discover JVMs and merges into `java_runtimes.json` (superuser only).
+- `POST /api/java-runtimes`: Adds or updates a custom Java runtime (superuser only).
+- `DELETE /api/java-runtimes/{id}`: Deletes a configured Java runtime (superuser only).
+
+### User Management
+- `GET /api/users`: List users. Superusers see full list and permissions; others see sanitized username directory.
+- `PATCH /api/users/{id}`: Update permissions, toggle `is_superuser`, or reset password (superuser only).
+- `DELETE /api/users/{id}`: Delete user account (superuser only; cannot delete last superuser).
 
 ### Instance Management
-- `GET /api/instances`: Lists all instances with real-time status summary, player counts, ports, RAM, and version.
+- `GET /api/instances`: Lists all instances with real-time status summary, player counts, ports, RAM, version, and Java runtime.
 - `POST /api/instances`: Creates a new instance. Accepts multipart form data:
   - `name`: Server display name (required).
   - `file`: Minecraft server `.jar` binary (required).
   - `ram_gb`: RAM allocation in GB (default: `2`).
   - `minecraft_version` (or `version`): Minecraft version string (trimmed on save).
+  - `java_runtime` (or `java`): Optional Java runtime ID or custom binary path.
   - `server_port`: Optional preferred Minecraft game port.
   - `rcon_port`: Optional preferred RCON port.
   - Payload limit: up to 1 GB.
 - `GET /api/instances/{id}`: Returns full `InstanceConfig` details.
 - `PATCH /api/instances/{id}` and `POST /api/instances/{id}`: Updates instance settings:
-  - Body: `{ "ram_gb"?: number, "minecraft_version"?: string, "name"?: string }`.
+  - Body: `{ "ram_gb"?: number, "minecraft_version"?: string, "name"?: string, "java_runtime"?: string }`.
   - String values are automatically trimmed before persisting to config and memory runtime.
 - `DELETE /api/instances/{id}`: Deletes the instance, stops runtime if running, and recursively deletes its folder.
 

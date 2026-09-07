@@ -1,121 +1,148 @@
-use axum::{body::Body, extract::Request, http::StatusCode, response::Response};
-use clerk_rs::{
-    ClerkConfiguration,
-    apis::users_api::User as UsersApi,
-    clerk::Clerk,
-    models::User as UserModel,
-    validators::{authorizer::validate_jwt, jwks::MemoryCacheJwksProvider},
+use axum::{
+    extract::Request,
+    http::{header, Method, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
 };
 use futures_util::future::BoxFuture;
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
     sync::Arc,
     task::{Context, Poll},
-    time::{Duration, Instant},
 };
-use tokio::sync::RwLock;
 use tower::{Layer, Service};
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
-const PUBLIC_PATHS: &[&str] = &["/", "/api/status"];
-const ROLE_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+use crate::role_manager::{InstanceRole, RoleManager};
+use crate::user_manager::{UserManager, UserPermissions, UserSummary};
 
-struct CacheEntry {
-    role: String,
-    expires_at: Instant,
+pub const DEFAULT_JWT_SECRET: &str = "mcadmin_jwt_default_secret_change_in_production";
+const PUBLIC_PATHS: &[&str] = &[
+    "/",
+    "/api/status",
+    "/api/auth/health",
+    "/api/auth/login",
+    "/api/auth/register",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String, // user_id
+    pub username: String,
+    pub is_superuser: bool,
+    pub exp: usize,
+    pub iat: usize,
+}
+
+pub fn generate_token(user: &UserSummary, secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
+    let now = chrono::Utc::now().timestamp() as usize;
+    let exp = now + 7 * 24 * 3600; // 7 days expiration
+    let claims = Claims {
+        sub: user.id.clone(),
+        username: user.username.clone(),
+        is_superuser: user.is_superuser,
+        iat: now,
+        exp,
+    };
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+    )
+}
+
+pub fn verify_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+    let mut validation = jsonwebtoken::Validation::default();
+    validation.validate_exp = true;
+    let token_data = jsonwebtoken::decode::<Claims>(
+        token,
+        &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )?;
+    Ok(token_data.claims)
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthUser {
+    pub user_id: String,
+    pub username: String,
+    pub is_superuser: bool,
+    pub permissions: UserPermissions,
+}
+
+impl AuthUser {
+    pub fn can_create_server(&self) -> bool {
+        self.is_superuser || self.permissions.can_create_server
+    }
+
+    pub async fn can_manage_instance(&self, instance_id: &str, role_mgr: &RoleManager) -> bool {
+        if self.is_superuser {
+            return true;
+        }
+        matches!(
+            role_mgr.get_role(instance_id, &self.user_id).await,
+            Some(InstanceRole::Owner) | Some(InstanceRole::Admin)
+        )
+    }
+
+    pub async fn is_instance_owner(&self, instance_id: &str, role_mgr: &RoleManager) -> bool {
+        if self.is_superuser {
+            return true;
+        }
+        matches!(
+            role_mgr.get_role(instance_id, &self.user_id).await,
+            Some(InstanceRole::Owner)
+        )
+    }
+
+    pub async fn has_instance_access(&self, instance_id: &str, role_mgr: &RoleManager) -> bool {
+        if self.is_superuser {
+            return true;
+        }
+        role_mgr.get_role(instance_id, &self.user_id).await.is_some()
+    }
 }
 
 #[derive(Clone)]
-pub struct RoleCache {
-    inner: Arc<RwLock<HashMap<String, CacheEntry>>>,
+pub struct JwtAuthLayer {
+    jwt_secret: Arc<String>,
+    user_manager: Arc<UserManager>,
 }
 
-impl RoleCache {
-    fn new() -> Self {
+impl JwtAuthLayer {
+    pub fn new(jwt_secret: String, user_manager: Arc<UserManager>) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    async fn get(&self, user_id: &str) -> Option<(String, Duration)> {
-        let cache = self.inner.read().await;
-        cache.get(user_id).and_then(|entry| {
-            let now = Instant::now();
-            if now < entry.expires_at {
-                let ttl = entry.expires_at.duration_since(now);
-                Some((entry.role.clone(), ttl))
-            } else {
-                None
-            }
-        })
-    }
-
-    async fn insert(&self, user_id: &str, role: &str) {
-        let mut cache = self.inner.write().await;
-        cache.insert(
-            user_id.to_owned(),
-            CacheEntry {
-                role: role.to_owned(),
-                expires_at: Instant::now() + ROLE_CACHE_TTL,
-            },
-        );
-    }
-}
-
-#[derive(Clone)]
-pub struct ClerkAuthLayer {
-    clerk: Clerk,
-    jwks_provider: Arc<MemoryCacheJwksProvider>,
-    public_paths: Arc<HashSet<&'static str>>,
-    role_cache: RoleCache,
-}
-
-impl ClerkAuthLayer {
-    pub fn new(clerk_secret_key: String) -> Self {
-        let config = ClerkConfiguration::new(None, None, Some(clerk_secret_key), None);
-        let clerk = Clerk::new(config);
-        let jwks_provider = MemoryCacheJwksProvider::new(clerk.clone());
-
-        let public_paths = PUBLIC_PATHS.iter().copied().collect();
-
-        Self {
-            clerk,
-            jwks_provider: Arc::new(jwks_provider),
-            public_paths: Arc::new(public_paths),
-            role_cache: RoleCache::new(),
+            jwt_secret: Arc::new(jwt_secret),
+            user_manager,
         }
     }
 }
 
-impl<S> Layer<S> for ClerkAuthLayer {
-    type Service = ClerkAuthService<S>;
+impl<S> Layer<S> for JwtAuthLayer {
+    type Service = JwtAuthMiddleware<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        ClerkAuthService {
+        JwtAuthMiddleware {
             inner,
-            clerk: self.clerk.clone(),
-            jwks_provider: self.jwks_provider.clone(),
-            public_paths: self.public_paths.clone(),
-            role_cache: self.role_cache.clone(),
+            jwt_secret: self.jwt_secret.clone(),
+            user_manager: self.user_manager.clone(),
         }
     }
 }
 
 #[derive(Clone)]
-pub struct ClerkAuthService<S> {
+pub struct JwtAuthMiddleware<S> {
     inner: S,
-    clerk: Clerk,
-    jwks_provider: Arc<MemoryCacheJwksProvider>,
-    public_paths: Arc<HashSet<&'static str>>,
-    role_cache: RoleCache,
+    jwt_secret: Arc<String>,
+    user_manager: Arc<UserManager>,
 }
 
-impl<S> Service<Request> for ClerkAuthService<S>
+impl<S> Service<Request> for JwtAuthMiddleware<S>
 where
-    S: Service<Request, Response = Response> + Send + 'static + Clone,
+    S: Service<Request, Response = Response> + Send + Clone + 'static,
     S::Future: Send + 'static,
 {
-    type Response = S::Response;
+    type Response = Response;
     type Error = S::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -124,161 +151,113 @@ where
     }
 
     fn call(&mut self, mut request: Request) -> Self::Future {
-        let path = request.uri().path().to_owned();
-
-        if request.method() == axum::http::Method::OPTIONS || self.public_paths.contains(path.as_str()) {
-            let mut inner = self.inner.clone();
-            return Box::pin(async move { inner.call(request).await });
-        }
-
-        let auth_header = request
-            .headers()
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_owned());
-
-        let token = match auth_header {
-            Some(header) => header.strip_prefix("Bearer ").unwrap_or(&header).to_owned(),
-            None => {
-                let cookie_token = request
-                    .headers()
-                    .get("cookie")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(parse_session_cookie);
-
-                match cookie_token {
-                    Some(t) => t,
-                    None => {
-                        warn!(
-                            "auth rejected on {path}: no Authorization header and no __session cookie"
-                        );
-                        return Box::pin(async {
-                            Ok(Response::builder()
-                                .status(StatusCode::UNAUTHORIZED)
-                                .body(Body::from("Missing Authorization header or session cookie"))
-                                .unwrap())
-                        });
-                    }
-                }
-            }
-        };
-
-        let jwks_provider = self.jwks_provider.clone();
-        let clerk = self.clerk.clone();
-        let role_cache = self.role_cache.clone();
         let mut inner = self.inner.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let user_manager = self.user_manager.clone();
 
         Box::pin(async move {
-            let jwt = match validate_jwt(&token, jwks_provider).await {
-                Ok(jwt) => jwt,
-                Err(e) => {
-                    warn!("auth rejected on {path}: JWT validation failed: {e}");
-                    return Ok(Response::builder()
-                        .status(StatusCode::UNAUTHORIZED)
-                        .body(Body::from("Invalid or expired token"))
-                        .unwrap());
-                }
-            };
+            // CORS preflight and public paths bypass
+            if request.method() == Method::OPTIONS {
+                return inner.call(request).await;
+            }
 
-            let role = match role_cache.get(&jwt.sub).await {
-                Some((role, ttl)) => {
-                    info!(
-                        "role cache hit for user={}: role={role} ttl={:.0}s",
-                        jwt.sub,
-                        ttl.as_secs_f64()
-                    );
-                    role
-                }
+            let path = request.uri().path();
+            if PUBLIC_PATHS.contains(&path) {
+                return inner.call(request).await;
+            }
+
+            // Extract token from Authorization header or Cookie
+            let token = extract_token(&request);
+
+            let token = match token {
+                Some(t) => t,
                 None => {
-                    info!("role cache miss for user={}", jwt.sub);
-                    let user = match UsersApi::get_user(&clerk, &jwt.sub).await {
-                        Ok(user) => user,
-                        Err(e) => {
-                            warn!(
-                                "auth rejected on {path}: failed to fetch user {}: {e}",
-                                jwt.sub
-                            );
-                            return Ok(Response::builder()
-                                .status(StatusCode::UNAUTHORIZED)
-                                .body(Body::from("Failed to fetch user"))
-                                .unwrap());
-                        }
-                    };
-
-                    let role = extract_user_role(&user);
-                    role_cache.insert(&jwt.sub, &role).await;
-                    role
+                    warn!("Auth rejected on {path}: missing token");
+                    let res = (
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({
+                            "error": "Authentication required. Missing token."
+                        })),
+                    )
+                        .into_response();
+                    return Ok(res);
                 }
             };
 
-            info!("auth OK on {path}: user={} role={role}", jwt.sub);
-            request.extensions_mut().insert(AuthUser {
-                user_id: jwt.sub.clone(),
-                role: role.clone(),
-            });
-            request.extensions_mut().insert(jwt);
+            // Validate token
+            let claims = match verify_token(&token, &jwt_secret) {
+                Ok(c) => c,
+                Err(err) => {
+                    warn!("Auth rejected on {path}: token verification failed ({err})");
+                    let res = (
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({
+                            "error": "Invalid or expired token."
+                        })),
+                    )
+                        .into_response();
+                    return Ok(res);
+                }
+            };
+
+            // Lookup current user in user_manager for up-to-date permissions
+            let user = match user_manager.get_user_by_id(&claims.sub).await {
+                Some(u) => u,
+                None => {
+                    warn!("Auth rejected on {path}: user {} no longer exists", claims.sub);
+                    let res = (
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({
+                            "error": "User account no longer exists."
+                        })),
+                    )
+                        .into_response();
+                    return Ok(res);
+                }
+            };
+
+            let auth_user = AuthUser {
+                user_id: user.id,
+                username: user.username,
+                is_superuser: user.is_superuser,
+                permissions: user.permissions,
+            };
+
+            debug!(
+                "Authenticated user '{}' (id: {}, superuser: {}) on {path}",
+                auth_user.username, auth_user.user_id, auth_user.is_superuser
+            );
+
+            request.extensions_mut().insert(auth_user);
             inner.call(request).await
         })
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct AuthUser {
-    pub user_id: String,
-    pub role: String,
-}
-
-impl AuthUser {
-    pub fn is_superadmin(&self) -> bool {
-        self.role == "superadmin"
-    }
-
-    pub fn can_manage_instance(&self, instance: &crate::instance_config::InstanceConfig) -> bool {
-        if self.is_superadmin() {
-            return true;
-        }
-        if let Some(owner) = &instance.owner_id {
-            if owner == &self.user_id {
-                return true;
-            }
-        }
-        if instance.admins.contains(&self.user_id) {
-            return true;
-        }
-        false
-    }
-
-    pub fn is_instance_owner(&self, instance: &crate::instance_config::InstanceConfig) -> bool {
-        if self.is_superadmin() {
-            return true;
-        }
-        if let Some(owner) = &instance.owner_id {
-            if owner == &self.user_id {
-                return true;
-            }
-        }
-        false
-    }
-}
-
-fn extract_user_role(user: &UserModel) -> String {
-    user.public_metadata
-        .as_ref()
-        .and_then(|meta| meta.get("role"))
-        .and_then(|v| v.as_str())
-        .map(|r| r.to_lowercase())
-        .unwrap_or_else(|| "normuser".to_string())
-}
-
-fn parse_session_cookie(cookie_header: &str) -> Option<String> {
-    for part in cookie_header.split(';') {
-        let part = part.trim();
-        if let Some(value) = part.strip_prefix("__session=") {
-            let value = value.trim();
-            if !value.is_empty() {
-                return Some(value.to_owned());
+fn extract_token(request: &Request) -> Option<String> {
+    // 1. Authorization: Bearer <token>
+    if let Some(auth_val) = request.headers().get(header::AUTHORIZATION) {
+        if let Ok(auth_str) = auth_val.to_str() {
+            if let Some(token) = auth_str.strip_prefix("Bearer ").or_else(|| auth_str.strip_prefix("bearer ")) {
+                return Some(token.trim().to_string());
             }
         }
     }
+
+    // 2. Cookie: mcadmin_token=<token>
+    if let Some(cookie_val) = request.headers().get(header::COOKIE) {
+        if let Ok(cookie_str) = cookie_val.to_str() {
+            for pair in cookie_str.split(';') {
+                let pair = pair.trim();
+                if let Some(token) = pair.strip_prefix("mcadmin_token=") {
+                    return Some(token.trim().to_string());
+                }
+                if let Some(token) = pair.strip_prefix("auth_token=") {
+                    return Some(token.trim().to_string());
+                }
+            }
+        }
+    }
+
     None
 }

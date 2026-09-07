@@ -139,7 +139,7 @@ impl InstanceRuntime {
         }
     }
 
-    pub async fn start(&mut self) -> io::Result<()> {
+    pub async fn start(&mut self, java_bin: &str) -> io::Result<()> {
         if self.state != MinecraftServerState::Offline {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -166,12 +166,13 @@ impl InstanceRuntime {
         let xmx = format!("-Xmx{}G", ram_gb);
 
         info!(
-            "Starting Minecraft instance '{}' in {}",
+            "Starting Minecraft instance '{}' with Java binary '{}' in {}",
             self.config.name,
+            java_bin,
             self.instance_dir.display()
         );
 
-        let mut child = Command::new("java")
+        let child_res = Command::new(java_bin)
             .current_dir(&self.instance_dir)
             .arg(&xms)
             .arg(&xmx)
@@ -181,7 +182,16 @@ impl InstanceRuntime {
             .stdin(Stdio::inherit())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()?;
+            .spawn();
+
+        let mut child = match child_res {
+            Ok(c) => c,
+            Err(e) => {
+                let err_msg = format!("Failed to launch Minecraft server with Java binary '{java_bin}': {e}");
+                self.logs.push(format!("[ERROR] {err_msg}"));
+                return Err(io::Error::new(e.kind(), err_msg));
+            }
+        };
 
         let process_id = child.id();
 

@@ -3,24 +3,35 @@ mod auth;
 mod instance_config;
 mod instance_manager;
 mod instance_runtime;
+mod java_manager;
 mod minecraft_files;
+mod role_manager;
+mod user_manager;
 
+use api::auth::{auth_health, login, me, register};
 use api::health;
 use api::instances::{
-    command_instance, create_instance, delete_instance, get_instance, get_instance_file_content,
-    get_instance_online_players, get_instance_players, get_instance_properties, get_instance_status,
-    instance_player_action, list_instance_files, list_instances, start_instance, stop_instance,
-    update_instance, update_instance_admins, update_instance_properties, upload_instance_file,
-    write_instance_file,
+    add_instance_member, command_instance, create_instance, delete_instance, get_instance,
+    get_instance_file_content, get_instance_members, get_instance_online_players,
+    get_instance_players, get_instance_properties, get_instance_status, instance_player_action,
+    list_instance_files, list_instances, remove_instance_member, start_instance, stop_instance,
+    transfer_instance_ownership, update_instance, update_instance_admins,
+    update_instance_properties, upload_instance_file, write_instance_file,
 };
-use auth::ClerkAuthLayer;
+use api::java_runtimes::{
+    add_or_update_java_runtime, delete_java_runtime, list_java_runtimes, scan_java_runtimes,
+};
+use api::users::{delete_user, list_users, update_user};
+use auth::JwtAuthLayer;
 use axum::{
-    Router,
     http::Method,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
+    Router,
 };
 use instance_config::McConfigManager;
 use instance_manager::InstanceManager;
+use java_manager::JavaManager;
+use role_manager::RoleManager;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,13 +41,18 @@ use tower_http::{
     cors::{AllowHeaders, AllowOrigin, CorsLayer},
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
-use tracing::{Level, info};
+use tracing::{info, Level};
+use user_manager::UserManager;
 
 #[derive(Clone)]
 pub struct AppState {
     pub system: Arc<TokioMutex<System>>,
     pub config_manager: Arc<McConfigManager>,
     pub instance_manager: Arc<InstanceManager>,
+    pub user_manager: Arc<UserManager>,
+    pub role_manager: Arc<RoleManager>,
+    pub java_manager: Arc<JavaManager>,
+    pub jwt_secret: Arc<String>,
     pub home_dir: Arc<PathBuf>,
 }
 
@@ -55,9 +71,11 @@ async fn main() {
     let home_dir_str = env::var("HOME_DIR").expect("HOME_DIR must be set");
     let home_dir = Arc::new(PathBuf::from(home_dir_str));
     let config_path = home_dir.join("mc_config.json");
+    let users_path = home_dir.join("users.json");
+    let roles_path = home_dir.join("roles.json");
 
     let rcon_host = env::var("RCON_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let clerk_secret_key = env::var("CLERK_SECRET_KEY").expect("CLERK_SECRET_KEY must be set");
+    let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| auth::DEFAULT_JWT_SECRET.to_string());
 
     let config_manager = Arc::new(
         McConfigManager::load(config_path)
@@ -65,11 +83,38 @@ async fn main() {
             .expect("Failed to load McConfigManager"),
     );
 
+    let user_manager = Arc::new(
+        UserManager::load(users_path)
+            .await
+            .expect("Failed to load UserManager"),
+    );
+
+    let role_manager = Arc::new(
+        RoleManager::load(roles_path)
+            .await
+            .expect("Failed to load RoleManager"),
+    );
+
+    // Sync any existing instances into the roles store
+    let existing_instances = config_manager.list_instances().await;
+    role_manager
+        .sync_instances(&existing_instances)
+        .await
+        .expect("Failed to sync instance roles");
+
+    let java_runtimes_path = home_dir.join("java_runtimes.json");
+    let java_manager = Arc::new(
+        JavaManager::load(java_runtimes_path)
+            .await
+            .expect("Failed to load JavaManager"),
+    );
+
     let instance_manager = Arc::new(
         InstanceManager::new(
             (*home_dir).clone(),
             rcon_host,
             config_manager.clone(),
+            java_manager.clone(),
         )
         .await,
     );
@@ -78,13 +123,33 @@ async fn main() {
         system: Arc::new(TokioMutex::new(System::new_all())),
         config_manager,
         instance_manager,
+        user_manager: user_manager.clone(),
+        role_manager,
+        java_manager,
+        jwt_secret: Arc::new(jwt_secret.clone()),
         home_dir,
     };
 
-    info!("Loaded multi-instance runtime configuration");
+    info!("Loaded multi-instance runtime and in-house auth configuration");
 
     let app = Router::new()
+        // Public / Health routes
         .route("/", get(health))
+        .route("/api/auth/health", get(auth_health))
+        .route("/api/auth/register", post(register))
+        .route("/api/auth/login", post(login))
+        .route("/api/auth/me", get(me))
+        // User management
+        .route("/api/users", get(list_users))
+        .route("/api/users/{id}", patch(update_user).delete(delete_user))
+        // Java runtime management
+        .route(
+            "/api/java-runtimes",
+            get(list_java_runtimes).post(add_or_update_java_runtime),
+        )
+        .route("/api/java-runtimes/scan", post(scan_java_runtimes))
+        .route("/api/java-runtimes/{id}", delete(delete_java_runtime))
+        // Instances
         .route("/api/instances", get(list_instances))
         .route(
             "/api/instances",
@@ -105,7 +170,12 @@ async fn main() {
         .route("/api/instances/{id}/start", post(start_instance))
         .route("/api/instances/{id}/stop", post(stop_instance))
         .route("/api/instances/{id}/command", post(command_instance))
+        // Instance members & roles
+        .route("/api/instances/{id}/members", get(get_instance_members).post(add_instance_member))
+        .route("/api/instances/{id}/members/{user_id}", delete(remove_instance_member))
+        .route("/api/instances/{id}/transfer-ownership", post(transfer_instance_ownership))
         .route("/api/instances/{id}/admins", post(update_instance_admins))
+        // Instance properties & players
         .route(
             "/api/instances/{id}/properties",
             get(get_instance_properties).post(update_instance_properties),
@@ -119,6 +189,7 @@ async fn main() {
             "/api/instances/{id}/players/{action}",
             post(instance_player_action),
         )
+        // Instance files
         .route("/api/instances/{id}/files", get(list_instance_files))
         .route(
             "/api/instances/{id}/files/content",
@@ -137,7 +208,7 @@ async fn main() {
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
-        .layer(ClerkAuthLayer::new(clerk_secret_key))
+        .layer(JwtAuthLayer::new(jwt_secret, user_manager))
         .layer(cors_layer())
         .with_state(state);
 

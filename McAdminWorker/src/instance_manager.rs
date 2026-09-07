@@ -9,12 +9,14 @@ use uuid::Uuid;
 
 use crate::instance_config::{InstanceConfig, McConfigManager};
 use crate::instance_runtime::{InstanceRuntime, monitor_instance};
+use crate::java_manager::JavaManager;
 
 pub struct InstanceManager {
     home_dir: PathBuf,
     rcon_host: String,
     instances: TokioRwLock<HashMap<String, Arc<TokioMutex<InstanceRuntime>>>>,
     config_manager: Arc<McConfigManager>,
+    java_manager: Arc<JavaManager>,
 }
 
 impl InstanceManager {
@@ -22,12 +24,14 @@ impl InstanceManager {
         home_dir: PathBuf,
         rcon_host: String,
         config_manager: Arc<McConfigManager>,
+        java_manager: Arc<JavaManager>,
     ) -> Self {
         let manager = Self {
             home_dir,
             rcon_host,
             instances: TokioRwLock::new(HashMap::new()),
             config_manager,
+            java_manager,
         };
 
         manager.load_instances().await;
@@ -62,6 +66,7 @@ impl InstanceManager {
         name: String,
         ram_gb: u32,
         minecraft_version: Option<String>,
+        java_runtime: Option<String>,
         preferred_server_port: Option<u16>,
         preferred_rcon_port: Option<u16>,
         jar_data: &[u8],
@@ -128,6 +133,7 @@ impl InstanceManager {
             rcon_password,
             ram_gb,
             minecraft_version,
+            java_runtime,
             created_at: Utc::now().to_rfc3339(),
             owner_id,
             admins: Vec::new(),
@@ -176,9 +182,16 @@ impl InstanceManager {
             io::Error::new(io::ErrorKind::NotFound, "Instance not found")
         })?;
 
+        let java_bin = {
+            let runtime = runtime_arc.lock().await;
+            self.java_manager
+                .resolve_executable(runtime.config.java_runtime.as_deref())
+                .await
+        };
+
         {
             let mut runtime = runtime_arc.lock().await;
-            runtime.start().await?;
+            runtime.start(&java_bin).await?;
         }
 
         tokio::spawn(monitor_instance(runtime_arc));

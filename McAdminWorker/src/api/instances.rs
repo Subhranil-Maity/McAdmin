@@ -31,12 +31,39 @@ pub struct InstanceSummary {
     pub rcon_port: u16,
     pub ram_gb: u32,
     pub minecraft_version: Option<String>,
+    pub java_runtime: Option<String>,
     pub created_at: String,
     pub owner_id: Option<String>,
     pub admins: Vec<String>,
+    pub users: Vec<String>,
+    pub role: String,
     pub active_players: u32,
     pub max_players: u32,
     pub is_running: bool,
+}
+
+#[derive(Serialize)]
+pub struct MemberInfo {
+    pub id: String,
+    pub username: String,
+}
+
+#[derive(Serialize)]
+pub struct InstanceMembersResponse {
+    pub owner: Option<MemberInfo>,
+    pub admins: Vec<MemberInfo>,
+    pub users: Vec<MemberInfo>,
+}
+
+#[derive(Deserialize)]
+pub struct AddMemberRequest {
+    pub user_id: String,
+    pub role: String,
+}
+
+#[derive(Deserialize)]
+pub struct TransferOwnershipRequest {
+    pub new_owner_id: String,
 }
 
 #[derive(Serialize)]
@@ -53,6 +80,7 @@ pub struct InstanceStatusResponse {
     pub active_players: u32,
     pub max_players: u32,
     pub minecraft_version: Option<String>,
+    pub java_runtime: Option<String>,
     pub recent_logs: Vec<String>,
 }
 
@@ -62,6 +90,7 @@ pub struct UpdateInstanceRequest {
     #[serde(alias = "version")]
     pub minecraft_version: Option<String>,
     pub name: Option<String>,
+    pub java_runtime: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -157,13 +186,24 @@ pub struct PlayerActionResponse {
 
 pub async fn list_instances(
     State(state): State<AppState>,
-    Extension(_user): Extension<AuthUser>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<InstanceSummary>>, StatusCode> {
     let runtimes = state.instance_manager.list().await;
     let mut summaries = Vec::new();
 
     for runtime_arc in runtimes {
         let runtime = runtime_arc.lock().await;
+        let inst_id = &runtime.config.id;
+
+        let role_str = if user.is_superuser {
+            "superuser".to_string()
+        } else if let Some(role) = state.role_manager.get_role(inst_id, &user.user_id).await {
+            role.as_str().to_string()
+        } else {
+            continue;
+        };
+
+        let perms = state.role_manager.get_permissions(inst_id).await;
         let is_running = runtime.state == MinecraftServerState::Online;
         let status = runtime.state.as_str().to_string();
 
@@ -184,9 +224,12 @@ pub async fn list_instances(
             rcon_port: runtime.config.rcon_port,
             ram_gb: runtime.config.ram_gb,
             minecraft_version: runtime.config.minecraft_version.clone(),
+            java_runtime: runtime.config.java_runtime.clone(),
             created_at: runtime.config.created_at.clone(),
-            owner_id: runtime.config.owner_id.clone(),
-            admins: runtime.config.admins.clone(),
+            owner_id: perms.owner_id.or_else(|| runtime.config.owner_id.clone()),
+            admins: if !perms.admins.is_empty() { perms.admins } else { runtime.config.admins.clone() },
+            users: perms.users,
+            role: role_str,
             active_players,
             max_players,
             is_running,
@@ -202,9 +245,14 @@ pub async fn create_instance(
     Extension(user): Extension<AuthUser>,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<InstanceConfig>), StatusCode> {
+    if !user.can_create_server() {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let mut name = None;
     let mut ram_gb = 2u32;
     let mut minecraft_version = None;
+    let mut java_runtime = None;
     let mut server_port = None;
     let mut rcon_port = None;
     let mut jar_data = None;
@@ -224,6 +272,14 @@ pub async fn create_instance(
                     let trimmed = text.trim();
                     if !trimmed.is_empty() {
                         minecraft_version = Some(trimmed.to_string());
+                    }
+                }
+            }
+            "java_runtime" | "java" => {
+                if let Ok(text) = field.text().await {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        java_runtime = Some(trimmed.to_string());
                     }
                 }
             }
@@ -266,11 +322,12 @@ pub async fn create_instance(
             name,
             ram_gb,
             minecraft_version,
+            java_runtime,
             server_port,
             rcon_port,
             &jar_data,
             jar_filename,
-            Some(user.user_id),
+            Some(user.user_id.clone()),
         )
         .await
         .map_err(|e| {
@@ -278,14 +335,23 @@ pub async fn create_instance(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    let _ = state
+        .role_manager
+        .init_instance(&config.id, Some(user.user_id))
+        .await;
+
     Ok((StatusCode::CREATED, Json(config)))
 }
 
 pub async fn get_instance(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Extension(_user): Extension<AuthUser>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<InstanceConfig>, StatusCode> {
+    if !user.has_instance_access(&id, &state.role_manager).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let config = state
         .config_manager
         .get_instance(&id)
@@ -299,13 +365,13 @@ pub async fn delete_instance(
     Path(id): Path<String>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<StatusCode, StatusCode> {
-    let config = state
+    let _config = state
         .config_manager
         .get_instance(&id)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.is_instance_owner(&config) {
+    if !user.is_instance_owner(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -318,21 +384,27 @@ pub async fn delete_instance(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    let _ = state.role_manager.delete_instance(&id).await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn get_instance_status(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Extension(_user): Extension<AuthUser>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<InstanceStatusResponse>, StatusCode> {
+    if !user.has_instance_access(&id, &state.role_manager).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let runtime_arc = state
         .instance_manager
         .get(&id)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let (status_str, process_id, server_port, rcon_port, ram_gb, name, minecraft_version, recent_logs) = {
+    let (status_str, process_id, server_port, rcon_port, ram_gb, name, minecraft_version, java_runtime, recent_logs) = {
         let runtime = runtime_arc.lock().await;
         (
             runtime.state.as_str().to_string(),
@@ -342,6 +414,7 @@ pub async fn get_instance_status(
             runtime.config.ram_gb,
             runtime.config.name.clone(),
             runtime.config.minecraft_version.clone(),
+            runtime.config.java_runtime.clone(),
             runtime.logs.get_last_n(RECENT_LOG_LINES),
         )
     };
@@ -396,6 +469,7 @@ pub async fn get_instance_status(
         active_players,
         max_players,
         minecraft_version,
+        java_runtime,
         recent_logs,
     }))
 }
@@ -405,13 +479,13 @@ pub async fn start_instance(
     Path(id): Path<String>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<StatusCode, StatusCode> {
-    let config = state
+    let _config = state
         .config_manager
         .get_instance(&id)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.can_manage_instance(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -428,13 +502,13 @@ pub async fn stop_instance(
     Path(id): Path<String>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<StatusCode, StatusCode> {
-    let config = state
+    let _config = state
         .config_manager
         .get_instance(&id)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.can_manage_instance(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -452,13 +526,13 @@ pub async fn command_instance(
     Extension(user): Extension<AuthUser>,
     Json(payload): Json<CommandRequest>,
 ) -> Result<Json<CommandResponse>, StatusCode> {
-    let config = state
+    let _config = state
         .config_manager
         .get_instance(&id)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.can_manage_instance(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -497,14 +571,24 @@ pub async fn update_instance_admins(
     Extension(user): Extension<AuthUser>,
     Json(payload): Json<UpdateAdminsRequest>,
 ) -> Result<Json<InstanceConfig>, StatusCode> {
-    let config = state
+    let _config = state
         .config_manager
         .get_instance(&id)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.is_instance_owner(&config) {
+    if !user.is_instance_owner(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
+    }
+
+    let current_perms = state.role_manager.get_permissions(&id).await;
+    for existing_admin in &current_perms.admins {
+        if !payload.admins.contains(existing_admin) {
+            let _ = state.role_manager.remove_admin(&id, existing_admin).await;
+        }
+    }
+    for new_admin in &payload.admins {
+        let _ = state.role_manager.add_admin(&id, new_admin).await;
     }
 
     let updated = state
@@ -522,19 +606,124 @@ pub async fn update_instance_admins(
     Ok(Json(updated))
 }
 
+pub async fn get_instance_members(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<InstanceMembersResponse>, StatusCode> {
+    if !user.has_instance_access(&id, &state.role_manager).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let perms = state.role_manager.get_permissions(&id).await;
+
+    let owner = if let Some(ref owner_id) = perms.owner_id {
+        state.user_manager.get_by_id(owner_id).await.map(|u| MemberInfo {
+            id: u.id,
+            username: u.username,
+        })
+    } else {
+        None
+    };
+
+    let mut admins = Vec::new();
+    for admin_id in &perms.admins {
+        if let Some(u) = state.user_manager.get_by_id(admin_id).await {
+            admins.push(MemberInfo {
+                id: u.id,
+                username: u.username,
+            });
+        }
+    }
+
+    let mut users = Vec::new();
+    for uid in &perms.users {
+        if let Some(u) = state.user_manager.get_by_id(uid).await {
+            users.push(MemberInfo {
+                id: u.id,
+                username: u.username,
+            });
+        }
+    }
+
+    Ok(Json(InstanceMembersResponse {
+        owner,
+        admins,
+        users,
+    }))
+}
+
+pub async fn add_instance_member(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(user): Extension<AuthUser>,
+    Json(payload): Json<AddMemberRequest>,
+) -> Result<StatusCode, StatusCode> {
+    if !user.is_instance_owner(&id, &state.role_manager).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    if state.user_manager.get_by_id(&payload.user_id).await.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    match payload.role.to_lowercase().as_str() {
+        "admin" => {
+            state.role_manager.add_admin(&id, &payload.user_id).await.map_err(|_| StatusCode::BAD_REQUEST)?;
+        }
+        "user" => {
+            state.role_manager.add_user(&id, &payload.user_id).await.map_err(|_| StatusCode::BAD_REQUEST)?;
+        }
+        _ => return Err(StatusCode::BAD_REQUEST),
+    }
+
+    Ok(StatusCode::OK)
+}
+
+pub async fn remove_instance_member(
+    State(state): State<AppState>,
+    Path((id, user_id)): Path<(String, String)>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<StatusCode, StatusCode> {
+    if !user.is_instance_owner(&id, &state.role_manager).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    state.role_manager.remove_member(&id, &user_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::OK)
+}
+
+pub async fn transfer_instance_ownership(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(user): Extension<AuthUser>,
+    Json(payload): Json<TransferOwnershipRequest>,
+) -> Result<StatusCode, StatusCode> {
+    if !user.is_instance_owner(&id, &state.role_manager).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    if state.user_manager.get_by_id(&payload.new_owner_id).await.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    state.role_manager.transfer_ownership(&id, &payload.new_owner_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::OK)
+}
+
 pub async fn update_instance(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Extension(user): Extension<AuthUser>,
     Json(payload): Json<UpdateInstanceRequest>,
 ) -> Result<Json<InstanceConfig>, StatusCode> {
-    let config = state
+    let _config = state
         .config_manager
         .get_instance(&id)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.can_manage_instance(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -553,6 +742,7 @@ pub async fn update_instance(
             payload.ram_gb,
             trimmed_version,
             payload.name,
+            payload.java_runtime,
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -563,6 +753,7 @@ pub async fn update_instance(
         runtime.config.ram_gb = updated.ram_gb;
         runtime.config.minecraft_version = updated.minecraft_version.clone();
         runtime.config.name = updated.name.clone();
+        runtime.config.java_runtime = updated.java_runtime.clone();
     }
 
     Ok(Json(updated))
@@ -579,7 +770,7 @@ pub async fn get_instance_properties(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.can_manage_instance(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -608,7 +799,7 @@ pub async fn update_instance_properties(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.can_manage_instance(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -644,7 +835,7 @@ pub async fn get_instance_players(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.has_instance_access(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -685,13 +876,13 @@ pub async fn get_instance_online_players(
     Path(id): Path<String>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<String>>, StatusCode> {
-    let config = state
+    let _config = state
         .config_manager
         .get_instance(&id)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.has_instance_access(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -727,7 +918,7 @@ pub async fn instance_player_action(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.can_manage_instance(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -905,7 +1096,7 @@ pub async fn list_instance_files(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.can_manage_instance(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -975,7 +1166,7 @@ pub async fn get_instance_file_content(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.can_manage_instance(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -1017,7 +1208,7 @@ pub async fn write_instance_file(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.can_manage_instance(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -1049,7 +1240,7 @@ pub async fn upload_instance_file(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&config) {
+    if !user.can_manage_instance(&id, &state.role_manager).await {
         return Err(StatusCode::FORBIDDEN);
     }
 
