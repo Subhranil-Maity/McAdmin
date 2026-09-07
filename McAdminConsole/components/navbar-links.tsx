@@ -1,32 +1,38 @@
 "use client";
 
 import React from "react";
-import { useUser } from "@clerk/nextjs";
+import { useAuth } from "@/lib/auth/auth-context";
 import Link from "next/link";
-import { getUserRole, canAccessManageUser } from "@/types/roles";
+import { usePathname } from "next/navigation";
 
 export function NavbarLinks() {
-  const { user, isLoaded, isSignedIn } = useUser();
+  const { user } = useAuth();
+  const pathname = usePathname();
 
-  if (!isLoaded || !isSignedIn || !user) {
+  if (!user) {
     return null;
   }
-
-  const role = getUserRole(user.publicMetadata);
-  const canManage = canAccessManageUser(role);
 
   return (
     <nav className="flex items-center gap-4">
       <Link
         href="/dashboard"
-        className="text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors"
+        className={`text-sm font-medium transition-colors ${
+          pathname.startsWith("/dashboard")
+            ? "text-zinc-50 font-semibold"
+            : "text-zinc-400 hover:text-zinc-100"
+        }`}
       >
         Servers
       </Link>
-      {canManage && (
+      {user.is_superuser && (
         <Link
           href="/manageuser"
-          className="text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors"
+          className={`text-sm font-medium transition-colors ${
+            pathname === "/manageuser"
+              ? "text-zinc-50 font-semibold"
+              : "text-zinc-400 hover:text-zinc-100"
+          }`}
         >
           Manage Users
         </Link>

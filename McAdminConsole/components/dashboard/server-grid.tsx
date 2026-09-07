@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { UserRole } from "@/types/roles";
 import { InstanceSummary, deleteInstance, toggleServerPower, updateInstance } from "@/lib/mc-server";
+import { listJavaRuntimes, JavaRuntime } from "@/lib/mc-server/java";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +23,7 @@ import {
   X,
   Layers,
   AlertCircle,
+  Coffee,
 } from "lucide-react";
 
 interface ServerGridProps {
@@ -47,13 +49,22 @@ export default function ServerGrid({
   const [editingInstance, setEditingInstance] = useState<InstanceSummary | null>(null);
   const [editRamGb, setEditRamGb] = useState<number>(2);
   const [editVersion, setEditVersion] = useState<string>("");
+  const [editJava, setEditJava] = useState<string>("");
+  const [javaRuntimes, setJavaRuntimes] = useState<JavaRuntime[]>([]);
   const [isEditSaving, setIsEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+
+  useEffect(() => {
+    listJavaRuntimes()
+      .then((list) => setJavaRuntimes(list))
+      .catch((err) => console.error("Failed to load Java runtimes:", err));
+  }, []);
 
   const openEditModal = (inst: InstanceSummary) => {
     setEditingInstance(inst);
     setEditRamGb(inst.ram_gb || 2);
     setEditVersion(inst.minecraft_version || "");
+    setEditJava(inst.java_runtime || "");
     setEditError(null);
   };
 
@@ -71,6 +82,7 @@ export default function ServerGrid({
       await updateInstance(editingInstance.id, {
         ram_gb: editRamGb,
         minecraft_version: editVersion.trim(),
+        java_runtime: editJava,
       });
       await onRefresh();
       closeEditModal();
@@ -120,14 +132,18 @@ export default function ServerGrid({
   };
 
   const canManageInstance = (instance: InstanceSummary) => {
-    if (isDev || currentUserRole === UserRole.SUPERADMIN) return true;
+    if (isDev || currentUserRole === UserRole.SUPERUSER) return true;
+    const r = instance.role?.toLowerCase();
+    if (r === "superuser" || r === "owner" || r === "admin") return true;
     if (instance.owner_id && currentUserId && instance.owner_id === currentUserId) return true;
-    if (currentUserId && instance.admins.includes(currentUserId)) return true;
+    if (currentUserId && instance.admins?.includes(currentUserId)) return true;
     return false;
   };
 
   const canDeleteInstance = (instance: InstanceSummary) => {
-    if (isDev || currentUserRole === UserRole.SUPERADMIN) return true;
+    if (isDev || currentUserRole === UserRole.SUPERUSER) return true;
+    const r = instance.role?.toLowerCase();
+    if (r === "superuser" || r === "owner") return true;
     if (instance.owner_id && currentUserId && instance.owner_id === currentUserId) return true;
     return false;
   };
@@ -207,14 +223,30 @@ export default function ServerGrid({
                           v{instance.minecraft_version}
                         </span>
                       )}
-                      {isOwner && (
+                      {instance.java_runtime && (
+                        <span className="text-amber-300/90 px-1.5 py-0.2 rounded bg-amber-500/10 border border-amber-500/20 font-mono text-[10px] flex items-center gap-1">
+                          <Coffee className="w-2.5 h-2.5" />
+                          {instance.java_runtime}
+                        </span>
+                      )}
+                      {instance.role?.toLowerCase() === "superuser" && (
+                        <span className="text-rose-400 px-1 rounded bg-rose-500/10 border border-rose-500/20 font-sans text-[9px] font-bold uppercase">
+                          Superuser
+                        </span>
+                      )}
+                      {instance.role?.toLowerCase() === "owner" && (
                         <span className="text-amber-400 px-1 rounded bg-amber-400/10 border border-amber-400/20 font-sans text-[9px] font-bold uppercase">
                           Owner
                         </span>
                       )}
-                      {!isOwner && isAdmin && (
+                      {instance.role?.toLowerCase() === "admin" && (
                         <span className="text-purple-400 px-1 rounded bg-purple-400/10 border border-purple-400/20 font-sans text-[9px] font-bold uppercase">
                           Admin
+                        </span>
+                      )}
+                      {instance.role?.toLowerCase() === "user" && (
+                        <span className="text-zinc-400 px-1 rounded bg-zinc-800 border border-zinc-700 font-sans text-[9px] font-bold uppercase">
+                          User
                         </span>
                       )}
                     </div>
@@ -417,6 +449,35 @@ export default function ServerGrid({
                 />
               </div>
 
+              {/* Java Runtime */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-300 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Coffee className="w-3.5 h-3.5 text-amber-400" /> Java Runtime Environment
+                  </span>
+                  <span className="text-[10px] text-zinc-500 font-mono">
+                    {javaRuntimes.length > 0 ? `${javaRuntimes.length} available` : "System PATH"}
+                  </span>
+                </label>
+                <select
+                  value={editJava}
+                  onChange={(e) => setEditJava(e.target.value)}
+                  disabled={isEditSaving}
+                  className="w-full bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer font-mono"
+                >
+                  {javaRuntimes.map((r) => (
+                    <option key={r.id} value={r.id} className="bg-zinc-950 text-zinc-200">
+                      {r.name} {r.is_default ? "★ (Default)" : ""} {!r.is_valid ? "⚠ (Unverified)" : ""}
+                    </option>
+                  ))}
+                  {javaRuntimes.length === 0 && (
+                    <option value="" className="bg-zinc-950 text-zinc-200">
+                      System Default (java in PATH)
+                    </option>
+                  )}
+                </select>
+              </div>
+
               {/* RAM Allocation */}
               <div className="space-y-2 pt-1">
                 <div className="flex items-center justify-between">
@@ -465,7 +526,7 @@ export default function ServerGrid({
 
               <p className="text-[11px] text-zinc-500 flex items-center gap-1.5 pt-1">
                 <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span>Restart server for RAM changes to take effect.</span>
+                <span>Restart server for RAM and Java runtime changes to take effect.</span>
               </p>
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-zinc-800/80">

@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useRef } from "react";
 import { UserRole } from "@/types/roles";
+import { useAuth } from "@/lib/auth/auth-context";
 import {
   getServerStatus,
   getConsoleLogs,
@@ -77,17 +78,28 @@ const DashboardContext = createContext<DashboardContextType | undefined>(undefin
 
 export function DashboardProvider({
   children,
-  userRole,
-  isDev,
+  userRole: propUserRole,
+  isDev = false,
   instanceId,
 }: {
   children: React.ReactNode;
-  userRole: UserRole;
-  isDev: boolean;
+  userRole?: UserRole;
+  isDev?: boolean;
   instanceId?: string;
 }) {
+  const { user } = useAuth();
   const [instanceDetail, setInstanceDetail] = useState<InstanceDetail | null>(null);
   const [allInstances, setAllInstances] = useState<InstanceSummary[]>([]);
+
+  const effectiveRole: UserRole = user?.is_superuser
+    ? UserRole.SUPERUSER
+    : instanceDetail?.role?.toUpperCase() === "OWNER" ||
+      (instanceDetail?.owner_id && user && instanceDetail.owner_id === user.id)
+    ? UserRole.OWNER
+    : instanceDetail?.role?.toUpperCase() === "ADMIN" ||
+      (instanceDetail?.admins && user && instanceDetail.admins.includes(user.id))
+    ? UserRole.ADMIN
+    : propUserRole || UserRole.USER;
 
   // Server Data States
   const [status, setStatus] = useState<ServerStatus | null>(null);
@@ -345,7 +357,7 @@ export function DashboardProvider({
         refreshInstanceDetail,
         allInstances,
         refreshAllInstances,
-        userRole,
+        userRole: effectiveRole,
         isDev,
         status,
         isPhysicalServerOnline,

@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { useUser } from "@clerk/nextjs";
-import { getUserRole, UserRole } from "@/types/roles";
+import { useAuth } from "@/lib/auth/auth-context";
+import { UserRole } from "@/types/roles";
 import { listInstances, InstanceSummary } from "@/lib/mc-server";
 import ServerGrid from "@/components/dashboard/server-grid";
 import CreateInstanceDialog from "@/components/dashboard/create-instance-dialog";
@@ -10,13 +10,14 @@ import { Button } from "@/components/ui/button";
 import { Plus, Server, Activity, HardDrive, RefreshCw, Loader2 } from "lucide-react";
 
 export default function DashboardPage() {
-  const { user } = useUser();
+  const { user } = useAuth();
   const [instances, setInstances] = useState<InstanceSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
 
-  const role = user ? getUserRole(user.publicMetadata) : UserRole.NORMUSER;
   const isDev = process.env.NODE_ENV === "development";
+  const role = user?.is_superuser ? UserRole.SUPERUSER : UserRole.USER;
+  const canCreate = Boolean(isDev || user?.is_superuser || user?.permissions?.can_create_server);
 
   const fetchInstances = async () => {
     try {
@@ -38,8 +39,6 @@ export default function DashboardPage() {
   const totalRam = instances.reduce((acc, i) => acc + i.ram_gb, 0);
   const runningCount = instances.filter((i) => i.status === "ONLINE").length;
   const totalPlayers = instances.reduce((acc, i) => acc + (i.active_players || 0), 0);
-
-  const canCreate = isDev || role === UserRole.SUPERADMIN || role === UserRole.OWNER || role === UserRole.ADMIN;
 
   return (
     <div className="flex-1 w-full max-w-7xl mx-auto p-6 space-y-8 animate-fade-in">

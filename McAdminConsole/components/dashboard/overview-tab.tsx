@@ -13,12 +13,14 @@ import {
   AlertCircle,
   Loader2,
   Save,
+  Coffee,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ServerStatus, formatUptime, updateInstance } from "@/lib/mc-server";
+import { listJavaRuntimes, JavaRuntime } from "@/lib/mc-server/java";
 import { useDashboard } from "./dashboard-context";
 
 interface OverviewTabProps {
@@ -34,9 +36,17 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
 
   const [ramGb, setRamGb] = useState<number>(instanceDetail?.ram_gb ?? 2);
   const [versionInput, setVersionInput] = useState<string>(instanceDetail?.minecraft_version ?? "");
+  const [javaRuntimes, setJavaRuntimes] = useState<JavaRuntime[]>([]);
+  const [selectedJava, setSelectedJava] = useState<string>(instanceDetail?.java_runtime ?? "");
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    listJavaRuntimes()
+      .then((list) => setJavaRuntimes(list))
+      .catch((err) => console.error("Failed to load Java runtimes:", err));
+  }, []);
 
   useEffect(() => {
     if (instanceDetail) {
@@ -44,12 +54,19 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
       if (instanceDetail.minecraft_version !== undefined) {
         setVersionInput(instanceDetail.minecraft_version || "");
       }
+      if (instanceDetail.java_runtime !== undefined) {
+        setSelectedJava(instanceDetail.java_runtime || "");
+      }
     }
   }, [instanceDetail]);
 
   const currentRam = instanceDetail?.ram_gb ?? 2;
   const currentVersion = instanceDetail?.minecraft_version || "";
-  const isDirty = ramGb !== currentRam || versionInput.trim() !== currentVersion;
+  const currentJava = instanceDetail?.java_runtime || "";
+  const isDirty =
+    ramGb !== currentRam ||
+    versionInput.trim() !== currentVersion ||
+    selectedJava !== currentJava;
 
   const handleSaveConfig = async () => {
     if (!instanceId) return;
@@ -61,10 +78,11 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
       await updateInstance(instanceId, {
         ram_gb: ramGb,
         minecraft_version: trimmedVersion,
+        java_runtime: selectedJava,
       });
       await refreshInstanceDetail();
       await refreshAllInstances();
-      setSaveSuccess("Configuration saved! If the server is running, restart it to apply RAM changes.");
+      setSaveSuccess("Configuration saved! If the server is running, restart it to apply RAM and Java runtime changes.");
       setTimeout(() => setSaveSuccess(null), 5000);
     } catch (err) {
       console.error("Failed to update instance config:", err);
@@ -246,13 +264,45 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
                   Enter your server version string. Leading and trailing whitespaces are automatically trimmed before saving to configuration.
                 </p>
               </div>
+
+              {/* Java Runtime */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-zinc-300 flex items-center gap-1.5 uppercase font-mono tracking-wider">
+                    <Coffee className="w-4 h-4 text-amber-400" /> Java Runtime Environment
+                  </label>
+                  <span className="text-[10px] text-zinc-500 font-mono">
+                    {javaRuntimes.length > 0 ? `${javaRuntimes.length} available` : "System PATH"}
+                  </span>
+                </div>
+                <select
+                  value={selectedJava}
+                  onChange={(e) => setSelectedJava(e.target.value)}
+                  disabled={isSaving}
+                  className="w-full bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer font-mono"
+                >
+                  {javaRuntimes.map((r) => (
+                    <option key={r.id} value={r.id} className="bg-zinc-950 text-zinc-200">
+                      {r.name} {r.is_default ? "★ (Default)" : ""} {!r.is_valid ? "⚠ (Unverified)" : ""}
+                    </option>
+                  ))}
+                  {javaRuntimes.length === 0 && (
+                    <option value="" className="bg-zinc-950 text-zinc-200">
+                      System Default (java in PATH)
+                    </option>
+                  )}
+                </select>
+                <p className="text-[11px] text-zinc-500 leading-relaxed">
+                  Select the Java executable used to launch this Minecraft instance. Defined in <code className="text-zinc-400 font-mono">java_runtimes.json</code>.
+                </p>
+              </div>
             </div>
 
             {/* Bottom save action and warning */}
             <div className="pt-2 border-t border-zinc-800/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <p className="text-[11px] text-zinc-500 flex items-center gap-1.5">
                 <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span>RAM changes will take effect next time the server is restarted.</span>
+                <span>RAM and Java runtime changes will take effect next time the server is restarted.</span>
               </p>
               <Button
                 onClick={handleSaveConfig}

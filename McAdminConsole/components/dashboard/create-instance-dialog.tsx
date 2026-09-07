@@ -1,13 +1,15 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createInstance, InstanceSummary } from "@/lib/mc-server";
+import { listJavaRuntimes, JavaRuntime } from "@/lib/mc-server/java";
+import { useAuth } from "@/lib/auth/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { Upload, X, Loader2, Server, HardDrive, Network, CheckCircle2 } from "lucide-react";
+import { Upload, X, Loader2, Server, HardDrive, Network, CheckCircle2, Coffee } from "lucide-react";
 
 interface CreateInstanceDialogProps {
   isOpen: boolean;
@@ -45,10 +47,39 @@ export default function CreateInstanceDialog({
   const [rconPort, setRconPort] = useState(nextRconPort);
   const [jarFile, setJarFile] = useState<File | null>(null);
 
+  // Java Runtimes
+  const [javaRuntimes, setJavaRuntimes] = useState<JavaRuntime[]>([]);
+  const [selectedJava, setSelectedJava] = useState<string>("");
+  const [loadingRuntimes, setLoadingRuntimes] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    setLoadingRuntimes(true);
+    listJavaRuntimes()
+      .then((list) => {
+        if (!active) return;
+        setJavaRuntimes(list);
+        const def = list.find((r) => r.is_default) || list[0];
+        if (def) {
+          setSelectedJava(def.id);
+        }
+      })
+      .catch((err) => console.error("Failed to load Java runtimes:", err))
+      .finally(() => {
+        if (active) setLoadingRuntimes(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isOpen]);
+
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { user } = useAuth();
+  const canCreate = Boolean(user?.is_superuser || user?.permissions?.can_create_server);
 
   if (!isOpen) return null;
 
@@ -79,6 +110,10 @@ export default function CreateInstanceDialog({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canCreate) {
+      setError("Server creation permission has been disabled for your account.");
+      return;
+    }
     if (!name.trim()) {
       setError("Instance name is required");
       return;
@@ -96,6 +131,9 @@ export default function CreateInstanceDialog({
     formData.append("name", name.trim());
     if (minecraftVersion.trim()) {
       formData.append("minecraft_version", minecraftVersion.trim());
+    }
+    if (selectedJava.trim()) {
+      formData.append("java_runtime", selectedJava.trim());
     }
     formData.append("ram_gb", ramGb.toString());
     formData.append("server_port", serverPort.toString());
@@ -182,6 +220,35 @@ export default function CreateInstanceDialog({
                 disabled={isLoading}
                 className="bg-zinc-950 border-zinc-800 text-xs font-mono rounded-xl placeholder:text-zinc-600 focus-visible:ring-indigo-500"
               />
+            </div>
+
+            {/* Java Runtime */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-zinc-300 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Coffee className="w-3.5 h-3.5 text-amber-400" /> Java Runtime Environment
+                </span>
+                <span className="text-[10px] text-zinc-500 font-mono">
+                  {javaRuntimes.length > 0 ? `${javaRuntimes.length} detected` : "System PATH"}
+                </span>
+              </label>
+              <select
+                value={selectedJava}
+                onChange={(e) => setSelectedJava(e.target.value)}
+                disabled={isLoading || loadingRuntimes}
+                className="w-full bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer font-mono"
+              >
+                {javaRuntimes.map((r) => (
+                  <option key={r.id} value={r.id} className="bg-zinc-950 text-zinc-200">
+                    {r.name} {r.is_default ? "★ (Default)" : ""} {!r.is_valid ? "⚠" : ""}
+                  </option>
+                ))}
+                {javaRuntimes.length === 0 && (
+                  <option value="" className="bg-zinc-950 text-zinc-200">
+                    System Default (java in PATH)
+                  </option>
+                )}
+              </select>
             </div>
 
             {/* RAM Allocation */}

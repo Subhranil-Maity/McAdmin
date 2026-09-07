@@ -1,31 +1,27 @@
-import { currentUser, clerkClient } from "@clerk/nextjs/server";
-import { redirect } from "next/navigation";
-import { getUserRole, UserRole, canAccessManageUser } from "@/types/roles";
+"use client";
+
+import React from "react";
+import { useAuth } from "@/lib/auth/auth-context";
 import ManageUsersClient from "./manage-users-client";
-import { ShieldAlert, ArrowLeft, Terminal } from "lucide-react";
+import { ShieldAlert, ArrowLeft, Terminal, Loader2 } from "lucide-react";
 import Link from "next/link";
 
-interface SerializableUser {
-  id: string;
-  fullName: string;
-  email: string;
-  imageUrl: string;
-  role: UserRole;
-}
+export default function ManageUsersPage() {
+  const { user, isLoading } = useAuth();
 
-export default async function ManageUsersPage() {
-  const user = await currentUser();
-
-  if (!user) {
-    redirect("/");
+  if (isLoading) {
+    return (
+      <div className="flex-1 min-h-screen bg-zinc-950 text-zinc-50 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-6 h-6 animate-spin text-zinc-400" />
+          <span className="text-sm text-zinc-400">Loading user permissions...</span>
+        </div>
+      </div>
+    );
   }
 
-  const role = getUserRole(user.publicMetadata);
-  const isDev = process.env.NODE_ENV === "development";
-  const hasAccess = canAccessManageUser(role);
-
-  // If unauthorized, render the "Access Denied" dashboard page
-  if (!hasAccess) {
+  // If unauthorized, render the "Access Denied" page
+  if (!user || !user.is_superuser) {
     return (
       <div className="flex-1 min-h-screen bg-zinc-950 text-zinc-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full text-center space-y-6 p-8 rounded-2xl border border-rose-500/20 bg-zinc-900/50 backdrop-blur-md shadow-2xl relative overflow-hidden">
@@ -39,7 +35,7 @@ export default async function ManageUsersPage() {
           <div className="space-y-2">
             <h2 className="text-2xl font-black tracking-tight text-white">Access Denied</h2>
             <p className="text-sm text-zinc-400 leading-relaxed">
-              The User Management route is restricted to the <strong className="text-amber-400">OWNER</strong> role in production environments.
+              The User Management route is restricted to <strong className="text-rose-400">SUPERUSERS</strong>.
             </p>
           </div>
 
@@ -48,9 +44,9 @@ export default async function ManageUsersPage() {
               <Terminal className="w-3.5 h-3.5" />
               <span>Diagnostic Console</span>
             </div>
-            <div>ENVIRONMENT: production</div>
-            <div>REQUIRED_ROLE: OWNER</div>
-            <div>CURRENT_ROLE: {role}</div>
+            <div>REQUIRED: SUPERUSER</div>
+            <div>CURRENT_USER: {user ? user.username : "Unauthenticated"}</div>
+            <div>IS_SUPERUSER: {user?.is_superuser ? "true" : "false"}</div>
           </div>
 
           <div className="pt-2">
@@ -67,40 +63,10 @@ export default async function ManageUsersPage() {
     );
   }
 
-  // Fetch registered users from Clerk Client
-  const client = await clerkClient();
-  const response = await client.users.getUserList({
-    orderBy: "-created_at",
-    limit: 100,
-  });
-
-  // Map users to a safe, serializable array for Client Component hydration
-  const serializedUsers: SerializableUser[] = response.data.map((u) => {
-    const email = u.emailAddresses[0]?.emailAddress || "No email";
-    const name = 
-      u.fullName || 
-      [u.firstName, u.lastName].filter(Boolean).join(" ") || 
-      u.username || 
-      "Anonymous User";
-    
-    return {
-      id: u.id,
-      fullName: name,
-      email: email,
-      imageUrl: u.imageUrl || "",
-      role: getUserRole(u.publicMetadata),
-    };
-  });
-
   return (
     <div className="flex-1 min-h-screen bg-zinc-950 text-zinc-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-4xl mx-auto">
-        <ManageUsersClient
-          initialUsers={serializedUsers}
-          currentUserId={user.id}
-          currentUserRole={role}
-          isDev={isDev}
-        />
+      <div className="max-w-5xl mx-auto">
+        <ManageUsersClient currentUserId={user.id} />
       </div>
     </div>
   );

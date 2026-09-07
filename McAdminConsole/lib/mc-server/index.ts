@@ -8,3 +8,4 @@ export * from "./whitelist";
 export * from "./plugins";
 export * from "./properties";
 export * from "./files";
+export * from "./java";

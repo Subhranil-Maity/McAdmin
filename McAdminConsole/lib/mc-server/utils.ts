@@ -1,5 +1,7 @@
 import { ConsoleLog } from "./types";
 
+export const AUTH_TOKEN_KEY = "mcadmin_token";
+
 // Helper to simulate network latency
 export const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -20,85 +22,82 @@ export function getBackendStatusUrl(): string {
 }
 
 /**
- * Safely retrieve current Clerk session JWT token in the browser.
+ * Retrieve current JWT auth token in the browser.
  */
-export async function getAuthToken(): Promise<string | null> {
+export function getAuthToken(): string | null {
   if (typeof window === "undefined") {
     return null;
   }
 
-  // 1. Try window.Clerk.session.getToken()
   try {
-    const clerk = (window as unknown as { Clerk?: { session?: { getToken: (opts?: { skipCache?: boolean }) => Promise<string | null> } } }).Clerk;
-    if (clerk?.session) {
-      const token = await clerk.session.getToken();
-      if (token) return token;
-    }
-  } catch (err) {
-    console.debug("Could not get token from window.Clerk:", err);
-  }
+    const local = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (local) return local;
+  } catch {}
 
-  // 2. Try parsing __session cookie from document.cookie
   try {
-    const match = document.cookie.match(/(?:^|;\s*)__session=([^;]+)/);
+    const match = document.cookie.match(/(?:^|;\s*)mcadmin_token=([^;]+)/);
     if (match && match[1]) {
       return decodeURIComponent(match[1]);
     }
-  } catch (err) {
-    console.debug("Could not get token from document.cookie:", err);
-  }
-
-  // 3. If Clerk is still initializing, retry up to 5 times (500ms max)
-  for (let i = 0; i < 5; i++) {
-    await delay(100);
-    try {
-      const clerk = (window as unknown as { Clerk?: { session?: { getToken: (opts?: { skipCache?: boolean }) => Promise<string | null> } } }).Clerk;
-      if (clerk?.session) {
-        const token = await clerk.session.getToken();
-        if (token) return token;
-      }
-      const match = document.cookie.match(/(?:^|;\s*)__session=([^;]+)/);
-      if (match && match[1]) {
-        return decodeURIComponent(match[1]);
-      }
-    } catch {}
-  }
+  } catch {}
 
   return null;
 }
 
 /**
- * Standard fetch wrapper that automatically injects Clerk Bearer token.
+ * Save JWT auth token to localStorage and cookie.
+ */
+export function setAuthToken(token: string): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+  } catch {}
+
+  try {
+    // 7 days expiration
+    document.cookie = `mcadmin_token=${encodeURIComponent(token)}; path=/; max-age=604800; SameSite=Lax`;
+  } catch {}
+
+  window.dispatchEvent(new Event("mcadmin:auth_change"));
+}
+
+/**
+ * Clear JWT auth token.
+ */
+export function clearAuthToken(): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch {}
+
+  try {
+    document.cookie = "mcadmin_token=; path=/; max-age=0; SameSite=Lax";
+  } catch {}
+
+  window.dispatchEvent(new Event("mcadmin:auth_change"));
+}
+
+/**
+ * Standard fetch wrapper that automatically injects Bearer token.
  */
 export async function apiFetch(input: string | URL, init?: RequestInit): Promise<Response> {
-  let token = await getAuthToken();
+  const token = getAuthToken();
   const headers = new Headers(init?.headers);
+
   if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  let res = await fetch(input, {
+  const res = await fetch(input, {
     ...init,
     headers,
     credentials: "include",
   });
 
-  // If 401 occurs, attempt a single token refresh retry
-  if (res.status === 401 && typeof window !== "undefined") {
-    try {
-      const clerk = (window as unknown as { Clerk?: { session?: { getToken: (opts?: { skipCache?: boolean }) => Promise<string | null> } } }).Clerk;
-      if (clerk?.session) {
-        token = await clerk.session.getToken({ skipCache: true });
-        if (token) {
-          headers.set("Authorization", `Bearer ${token}`);
-          res = await fetch(input, {
-            ...init,
-            headers,
-            credentials: "include",
-          });
-        }
-      }
-    } catch {}
+  if (res.status === 401 && token) {
+    clearAuthToken();
   }
 
   return res;
@@ -121,17 +120,14 @@ export function parseLogLine(line: string): ConsoleLog {
   let level: "INFO" | "WARN" | "ERROR" = "INFO";
   let message = line;
 
-  // Extract timestamp like [22:59:57] or 22:59:57
   const timeRegex = /\[?(\d{2}:\d{2}:\d{2})\]?/;
   const timeMatch = line.match(timeRegex);
   if (timeMatch) {
     timestamp = timeMatch[1];
   } else {
-    // Fallback: format current time as HH:MM:SS
     timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
   }
 
-  // Extract level
   const upperLine = line.toUpperCase();
   if (upperLine.includes("ERROR") || upperLine.includes("SEVERE") || upperLine.includes("FATAL") || upperLine.includes("CRITICAL")) {
     level = "ERROR";
@@ -141,7 +137,6 @@ export function parseLogLine(line: string): ConsoleLog {
     level = "INFO";
   }
 
-  // Clean message: remove prefix like "[22:59:57] [Server thread/INFO]: " or "[22:59:57 INFO]: "
   const bracketColonIdx = line.indexOf("]: ");
   if (bracketColonIdx !== -1) {
     message = line.substring(bracketColonIdx + 3);

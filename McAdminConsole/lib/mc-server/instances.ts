@@ -8,9 +8,12 @@ export interface InstanceSummary {
   rcon_port: number;
   ram_gb: number;
   minecraft_version?: string;
+  java_runtime?: string;
   created_at: string;
   owner_id?: string;
   admins: string[];
+  users?: string[];
+  role?: string;
   active_players: number;
   max_players: number;
   is_running: boolean;
@@ -26,9 +29,12 @@ export interface InstanceDetail {
   rcon_password?: string;
   ram_gb: number;
   minecraft_version?: string;
+  java_runtime?: string;
   created_at: string;
   owner_id?: string;
   admins: string[];
+  users?: string[];
+  role?: string;
 }
 
 export async function listInstances(): Promise<InstanceSummary[]> {
@@ -190,6 +196,7 @@ export interface UpdateInstancePayload {
   ram_gb?: number;
   minecraft_version?: string;
   name?: string;
+  java_runtime?: string;
 }
 
 export async function updateInstance(
@@ -207,6 +214,7 @@ export async function updateInstance(
       rcon_port: 25575,
       ram_gb: payload.ram_gb ?? 4,
       minecraft_version: payload.minecraft_version ? payload.minecraft_version.trim() : undefined,
+      java_runtime: payload.java_runtime ? payload.java_runtime.trim() : undefined,
       created_at: new Date().toISOString(),
       admins: [],
     };
@@ -215,6 +223,9 @@ export async function updateInstance(
   const cleanedPayload: UpdateInstancePayload = { ...payload };
   if (cleanedPayload.minecraft_version !== undefined) {
     cleanedPayload.minecraft_version = cleanedPayload.minecraft_version.trim();
+  }
+  if (cleanedPayload.java_runtime !== undefined) {
+    cleanedPayload.java_runtime = cleanedPayload.java_runtime.trim();
   }
 
   const res = await apiFetch(`${base}/api/instances/${encodeURIComponent(id)}`, {
@@ -229,3 +240,67 @@ export async function updateInstance(
 
   return res.json();
 }
+
+export interface MemberInfo {
+  id: string;
+  username: string;
+}
+
+export interface InstanceMembersResponse {
+  owner: MemberInfo | null;
+  admins: MemberInfo[];
+  users: MemberInfo[];
+}
+
+export async function getInstanceMembers(instanceId: string): Promise<InstanceMembersResponse> {
+  const base = getBackendBaseUrl();
+  const res = await apiFetch(`${base}/api/instances/${encodeURIComponent(instanceId)}/members`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch instance members: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function addInstanceMember(
+  instanceId: string,
+  userId: string,
+  role: "admin" | "user"
+): Promise<void> {
+  const base = getBackendBaseUrl();
+  const res = await apiFetch(`${base}/api/instances/${encodeURIComponent(instanceId)}/members`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: userId, role }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to add member: ${res.status}`);
+  }
+}
+
+export async function removeInstanceMember(instanceId: string, userId: string): Promise<void> {
+  const base = getBackendBaseUrl();
+  const res = await apiFetch(
+    `${base}/api/instances/${encodeURIComponent(instanceId)}/members/${encodeURIComponent(userId)}`,
+    {
+      method: "DELETE",
+    }
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to remove member: ${res.status}`);
+  }
+}
+
+export async function transferInstanceOwnership(instanceId: string, newOwnerId: string): Promise<void> {
+  const base = getBackendBaseUrl();
+  const res = await apiFetch(`${base}/api/instances/${encodeURIComponent(instanceId)}/transfer-ownership`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ new_owner_id: newOwnerId }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to transfer ownership: ${res.status}`);
+  }
+}
+
