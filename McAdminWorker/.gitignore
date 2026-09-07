@@ -1,2 +1,5 @@
 /target
 server.jar
+.env
+.env.*
+!.env.example
