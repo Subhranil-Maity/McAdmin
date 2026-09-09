@@ -259,5 +259,14 @@ fn extract_token(request: &Request) -> Option<String> {
         }
     }
 
+    // 3. Query param ?token=<token> (useful for WebSockets)
+    if let Some(query) = request.uri().query() {
+        for pair in query.split('&') {
+            if let Some(token) = pair.strip_prefix("token=") {
+                return Some(token.trim().to_string());
+            }
+        }
+    }
+
     None
 }

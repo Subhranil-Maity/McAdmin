@@ -14,9 +14,9 @@ use api::instances::{
     add_instance_member, command_instance, create_instance, delete_instance, get_instance,
     get_instance_file_content, get_instance_members, get_instance_online_players,
     get_instance_players, get_instance_properties, get_instance_status, instance_player_action,
-    list_instance_files, list_instances, remove_instance_member, start_instance, stop_instance,
-    transfer_instance_ownership, update_instance, update_instance_admins,
-    update_instance_properties, upload_instance_file, write_instance_file,
+    instance_ws_handler, list_instance_files, list_instances, remove_instance_member,
+    start_instance, stop_instance, transfer_instance_ownership, update_instance,
+    update_instance_admins, update_instance_properties, upload_instance_file, write_instance_file,
 };
 use api::java_runtimes::{
     add_or_update_java_runtime, delete_java_runtime, list_java_runtimes, scan_java_runtimes,
@@ -167,6 +167,7 @@ async fn main() {
             patch(update_instance).post(update_instance),
         )
         .route("/api/instances/{id}/status", get(get_instance_status))
+        .route("/api/instances/{id}/ws", get(instance_ws_handler))
         .route("/api/instances/{id}/start", post(start_instance))
         .route("/api/instances/{id}/stop", post(stop_instance))
         .route("/api/instances/{id}/command", post(command_instance))

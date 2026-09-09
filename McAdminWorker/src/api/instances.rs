@@ -1,20 +1,29 @@
 use axum::{
-    Extension, Json,
-    extract::{Multipart, Path, Query, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Multipart, Path, Query, State,
+    },
     http::StatusCode,
+    response::Response,
+    Extension, Json,
 };
 use chrono::{DateTime, Utc};
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path as FsPath, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate};
 use tokio::fs;
+use tokio::sync::broadcast;
+use tokio::sync::Mutex as TokioMutex;
+use tokio::time::{interval, Duration};
 use tracing::error;
 
 use crate::auth::AuthUser;
 use crate::instance_config::InstanceConfig;
-use crate::instance_runtime::MinecraftServerState;
+use crate::instance_runtime::{IndexedLog, InstanceLogEvent, InstanceRuntime, MinecraftServerState};
 use crate::minecraft_files::{self, BannedPlayerEntry, OpEntry, WhitelistEntry};
 use crate::AppState;
 
@@ -66,6 +75,23 @@ pub struct TransferOwnershipRequest {
     pub new_owner_id: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct InstanceStatusMetrics {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub server_port: u16,
+    pub rcon_port: u16,
+    pub cpu_usage: f32,
+    pub ram_allocated_mb: u64,
+    pub ram_used_mb: u64,
+    pub uptime_seconds: u64,
+    pub active_players: u32,
+    pub max_players: u32,
+    pub minecraft_version: Option<String>,
+    pub java_runtime: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct InstanceStatusResponse {
     pub id: String,
@@ -82,6 +108,36 @@ pub struct InstanceStatusResponse {
     pub minecraft_version: Option<String>,
     pub java_runtime: Option<String>,
     pub recent_logs: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum ClientWsMessage {
+    #[serde(rename = "subscribe_logs")]
+    SubscribeLogs,
+    #[serde(rename = "unsubscribe_logs")]
+    UnsubscribeLogs,
+    #[serde(rename = "ping")]
+    Ping,
+    #[serde(rename = "command")]
+    Command { command: String },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", content = "data")]
+enum ServerWsMessage<'a> {
+    #[serde(rename = "status")]
+    Status(&'a InstanceStatusMetrics),
+    #[serde(rename = "log_backlog")]
+    LogBacklog { logs: &'a [IndexedLog] },
+    #[serde(rename = "log")]
+    Log(&'a IndexedLog),
+    #[serde(rename = "log_clear")]
+    LogClear,
+    #[serde(rename = "command_result")]
+    CommandResult { status: &'static str, command: &'a str, response: &'a str },
+    #[serde(rename = "pong")]
+    Pong,
 }
 
 #[derive(Deserialize)]
@@ -389,22 +445,12 @@ pub async fn delete_instance(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn get_instance_status(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Extension(user): Extension<AuthUser>,
-) -> Result<Json<InstanceStatusResponse>, StatusCode> {
-    if !user.has_instance_access(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    let runtime_arc = state
-        .instance_manager
-        .get(&id)
-        .await
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let (status_str, process_id, server_port, rcon_port, ram_gb, name, minecraft_version, java_runtime, recent_logs) = {
+pub async fn collect_instance_metrics(
+    id: &str,
+    runtime_arc: &Arc<TokioMutex<InstanceRuntime>>,
+    state: &AppState,
+) -> InstanceStatusMetrics {
+    let (status_str, process_id, server_port, rcon_port, ram_gb, name, minecraft_version, java_runtime) = {
         let runtime = runtime_arc.lock().await;
         (
             runtime.state.as_str().to_string(),
@@ -415,7 +461,6 @@ pub async fn get_instance_status(
             runtime.config.name.clone(),
             runtime.config.minecraft_version.clone(),
             runtime.config.java_runtime.clone(),
-            runtime.logs.get_last_n(RECENT_LOG_LINES),
         )
     };
 
@@ -456,8 +501,8 @@ pub async fn get_instance_status(
         (0.0, 0, 0)
     };
 
-    Ok(Json(InstanceStatusResponse {
-        id,
+    InstanceStatusMetrics {
+        id: id.to_string(),
         name,
         status: status_str,
         server_port,
@@ -470,8 +515,223 @@ pub async fn get_instance_status(
         max_players,
         minecraft_version,
         java_runtime,
+    }
+}
+
+pub async fn get_instance_status(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<InstanceStatusResponse>, StatusCode> {
+    if !user.has_instance_access(&id, &state.role_manager).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let runtime_arc = state
+        .instance_manager
+        .get(&id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let metrics = collect_instance_metrics(&id, &runtime_arc, &state).await;
+    let recent_logs = {
+        let runtime = runtime_arc.lock().await;
+        runtime.logs.get_last_n_strings(RECENT_LOG_LINES)
+    };
+
+    Ok(Json(InstanceStatusResponse {
+        id: metrics.id,
+        name: metrics.name,
+        status: metrics.status,
+        server_port: metrics.server_port,
+        rcon_port: metrics.rcon_port,
+        cpu_usage: metrics.cpu_usage,
+        ram_allocated_mb: metrics.ram_allocated_mb,
+        ram_used_mb: metrics.ram_used_mb,
+        uptime_seconds: metrics.uptime_seconds,
+        active_players: metrics.active_players,
+        max_players: metrics.max_players,
+        minecraft_version: metrics.minecraft_version,
+        java_runtime: metrics.java_runtime,
         recent_logs,
     }))
+}
+
+pub async fn instance_ws_handler(
+    ws: WebSocketUpgrade,
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Response, StatusCode> {
+    if !user.has_instance_access(&id, &state.role_manager).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let runtime_arc = state
+        .instance_manager
+        .get(&id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(ws.on_upgrade(move |socket| handle_instance_socket(socket, id, runtime_arc, state, user)))
+}
+
+async fn handle_instance_socket(
+    socket: WebSocket,
+    id: String,
+    runtime_arc: Arc<TokioMutex<InstanceRuntime>>,
+    state: AppState,
+    user: AuthUser,
+) {
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    let mut log_rx = {
+        let runtime = runtime_arc.lock().await;
+        runtime.logs.subscribe()
+    };
+
+    // Send initial status snapshot immediately
+    let initial_metrics = collect_instance_metrics(&id, &runtime_arc, &state).await;
+    if let Ok(json) = serde_json::to_string(&ServerWsMessage::Status(&initial_metrics)) {
+        if ws_sender.send(Message::Text(json.into())).await.is_err() {
+            return;
+        }
+    }
+
+    let mut logs_subscribed = false;
+    let mut ticker = interval(Duration::from_millis(1500));
+    ticker.tick().await;
+
+    loop {
+        tokio::select! {
+            client_msg = ws_receiver.next() => {
+                let msg = match client_msg {
+                    Some(Ok(m)) => m,
+                    _ => break,
+                };
+
+                match msg {
+                    Message::Text(text) => {
+                        if let Ok(client_cmd) = serde_json::from_str::<ClientWsMessage>(&text) {
+                            match client_cmd {
+                                ClientWsMessage::SubscribeLogs => {
+                                    logs_subscribed = true;
+                                    let backlog = {
+                                        let runtime = runtime_arc.lock().await;
+                                        runtime.logs.get_all()
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&ServerWsMessage::LogBacklog { logs: &backlog }) {
+                                        if ws_sender.send(Message::Text(json.into())).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
+                                ClientWsMessage::UnsubscribeLogs => {
+                                    logs_subscribed = false;
+                                }
+                                ClientWsMessage::Ping => {
+                                    if let Ok(json) = serde_json::to_string(&ServerWsMessage::Pong) {
+                                        if ws_sender.send(Message::Text(json.into())).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
+                                ClientWsMessage::Command { command } => {
+                                    let clean_cmd = command.trim().trim_start_matches('/');
+                                    let can_manage = user.can_manage_instance(&id, &state.role_manager).await;
+                                    if !can_manage {
+                                        let resp = ServerWsMessage::CommandResult {
+                                            status: "error",
+                                            command: clean_cmd,
+                                            response: "Permission denied: admin or owner role required.",
+                                        };
+                                        if let Ok(json) = serde_json::to_string(&resp) {
+                                            let _ = ws_sender.send(Message::Text(json.into())).await;
+                                        }
+                                    } else {
+                                        let runtime = runtime_arc.lock().await;
+                                        let (status, response_str) = if runtime.state != MinecraftServerState::Online {
+                                            ("error", "Server is not running".to_string())
+                                        } else {
+                                            match runtime.rcon.execute(clean_cmd).await {
+                                                Ok(r) => ("ok", r),
+                                                Err(e) => ("error", e),
+                                            }
+                                        };
+                                        let resp = ServerWsMessage::CommandResult {
+                                            status,
+                                            command: clean_cmd,
+                                            response: &response_str,
+                                        };
+                                        if let Ok(json) = serde_json::to_string(&resp) {
+                                            let _ = ws_sender.send(Message::Text(json.into())).await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Message::Ping(payload) => {
+                        if ws_sender.send(Message::Pong(payload)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Message::Close(_) => {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            log_event = log_rx.recv() => {
+                match log_event {
+                    Ok(InstanceLogEvent::Log(indexed_log)) => {
+                        if logs_subscribed {
+                            if let Ok(json) = serde_json::to_string(&ServerWsMessage::Log(&indexed_log)) {
+                                if ws_sender.send(Message::Text(json.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Ok(InstanceLogEvent::LogClear) => {
+                        if logs_subscribed {
+                            if let Ok(json) = serde_json::to_string(&ServerWsMessage::LogClear) {
+                                if ws_sender.send(Message::Text(json.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if logs_subscribed {
+                            let backlog = {
+                                let runtime = runtime_arc.lock().await;
+                                runtime.logs.get_all()
+                            };
+                            if let Ok(json) = serde_json::to_string(&ServerWsMessage::LogBacklog { logs: &backlog }) {
+                                if ws_sender.send(Message::Text(json.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
+                }
+            }
+
+            _ = ticker.tick() => {
+                let metrics = collect_instance_metrics(&id, &runtime_arc, &state).await;
+                if let Ok(json) = serde_json::to_string(&ServerWsMessage::Status(&metrics)) {
+                    if ws_sender.send(Message::Text(json.into())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub async fn start_instance(
