@@ -21,6 +21,18 @@ export function getBackendStatusUrl(): string {
   return base ? `${base}/api/status` : "";
 }
 
+// Helper to construct backend WebSocket URL
+export function getBackendWsUrl(path: string): string {
+  const base = getBackendBaseUrl();
+  if (!base) return "";
+  const wsProto = base.startsWith("https://") ? "wss://" : "ws://";
+  const host = base.replace(/^https?:\/\//i, "");
+  const token = getAuthToken();
+  const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  return `${wsProto}${host}${cleanPath}${tokenParam}`;
+}
+
 /**
  * Retrieve current JWT auth token in the browser.
  */
@@ -115,7 +127,7 @@ export function formatUptime(seconds: number): string {
 }
 
 // Helper to parse logs returned from backend to ConsoleLog format
-export function parseLogLine(line: string): ConsoleLog {
+export function parseLogLine(line: string, index?: number): ConsoleLog {
   let timestamp = "";
   let level: "INFO" | "WARN" | "ERROR" = "INFO";
   let message = line;
@@ -147,7 +159,7 @@ export function parseLogLine(line: string): ConsoleLog {
     }
   }
 
-  return { timestamp, level, message };
+  return { index, timestamp, level, message };
 }
 
 // Helper to normalize path format

@@ -12,7 +12,15 @@ export default function InstanceConsolePage() {
     handleSendCommand,
     consoleEndRef,
     lastCommandResponse,
+    setConsoleActive,
+    isConsoleLogsLoading,
+    isWsConnected,
   } = useDashboard();
+
+  useEffect(() => {
+    setConsoleActive(true);
+    return () => setConsoleActive(false);
+  }, [setConsoleActive]);
 
   useEffect(() => {
     consoleEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -26,6 +34,8 @@ export default function InstanceConsolePage() {
       handleSendCommand={handleSendCommand}
       consoleEndRef={consoleEndRef}
       lastCommandResponse={lastCommandResponse}
+      isConsoleLogsLoading={isConsoleLogsLoading}
+      isWsConnected={isWsConnected}
     />
   );
 }

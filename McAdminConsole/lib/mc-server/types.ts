@@ -15,10 +15,40 @@ export interface ServerStatus {
 }
 
 export interface ConsoleLog {
+  index?: number;
   timestamp: string;
   level: "INFO" | "WARN" | "ERROR";
   message: string;
 }
+
+export interface WsIndexedLog {
+  index: number;
+  line: string;
+}
+
+export interface WsStatusMetrics {
+  id: string;
+  name: string;
+  status: ServerStatusState;
+  server_port: number;
+  rcon_port: number;
+  cpu_usage: number;
+  ram_allocated_mb: number;
+  ram_used_mb: number;
+  uptime_seconds: number;
+  active_players: number;
+  max_players: number;
+  minecraft_version?: string | null;
+  java_runtime?: string | null;
+}
+
+export type ServerWsMessage =
+  | { type: "status"; data: WsStatusMetrics }
+  | { type: "log_backlog"; data: { logs: WsIndexedLog[] } }
+  | { type: "log"; data: WsIndexedLog }
+  | { type: "log_clear" }
+  | { type: "command_result"; data: { status: string; command: string; response: string } }
+  | { type: "pong" };
 
 export interface CommandResponse {
   status: string;

@@ -5,7 +5,6 @@ import { UserRole } from "@/types/roles";
 import { useAuth } from "@/lib/auth/auth-context";
 import {
   getServerStatus,
-  getConsoleLogs,
   sendConsoleCommand,
   getServerPlayers,
   getWhitelist,
@@ -17,6 +16,8 @@ import {
   updatePlayerStatus,
   listInstances,
   getInstance,
+  getBackendWsUrl,
+  parseLogLine,
   ServerStatus,
   ConsoleLog,
   Player,
@@ -25,6 +26,7 @@ import {
   CommandResponse,
   InstanceSummary,
   InstanceDetail,
+  ServerWsMessage,
 } from "@/lib/mc-server";
 
 interface DashboardContextType {
@@ -36,6 +38,12 @@ interface DashboardContextType {
   userRole: UserRole;
   isDev: boolean;
   isPhysicalServerOnline: boolean;
+  isWsConnected: boolean;
+
+  // Console Streaming States
+  isConsoleActive: boolean;
+  setConsoleActive: React.Dispatch<React.SetStateAction<boolean>>;
+  isConsoleLogsLoading: boolean;
 
   // Server Data States
   status: ServerStatus | null;
@@ -142,7 +150,156 @@ export function DashboardProvider({
     }
   };
 
-  // Initial Load
+  const [isConsoleActive, setConsoleActive] = useState(false);
+  const [isConsoleLogsLoading, setIsConsoleLogsLoading] = useState(false);
+  const [isWsConnected, setIsWsConnected] = useState(false);
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttemptRef = useRef<number>(0);
+  const lastSeenLogIndexRef = useRef<number>(-1);
+  const isConsoleActiveRef = useRef<boolean>(false);
+  isConsoleActiveRef.current = isConsoleActive;
+
+  // Real-time WebSocket connection replacing HTTP polling
+  useEffect(() => {
+    if (!instanceId) return;
+
+    let isMounted = true;
+
+    function connectWs() {
+      if (!isMounted) return;
+
+      const wsUrl = getBackendWsUrl(`/api/instances/${encodeURIComponent(instanceId!)}/ws`);
+      if (!wsUrl) return;
+
+      try {
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          if (!isMounted) {
+            ws.close();
+            return;
+          }
+          setIsWsConnected(true);
+          reconnectAttemptRef.current = 0;
+          setIsPhysicalServerOnline(true);
+          consecutiveFailuresRef.current = 0;
+
+          // If console is active when WS connects, subscribe immediately
+          if (isConsoleActiveRef.current) {
+            setIsConsoleLogsLoading(true);
+            ws.send(JSON.stringify({ type: "subscribe_logs" }));
+          }
+        };
+
+        ws.onmessage = (event) => {
+          if (!isMounted) return;
+          try {
+            const msg: ServerWsMessage = JSON.parse(event.data);
+            switch (msg.type) {
+              case "status": {
+                const data = msg.data;
+                setStatus((prev) => ({
+                  status: data.status,
+                  cpu: typeof data.cpu_usage === "number" ? parseFloat(data.cpu_usage.toFixed(2)) : 0,
+                  ramMax: typeof data.ram_allocated_mb === "number" ? parseFloat((data.ram_allocated_mb / 1024).toFixed(2)) : 8.0,
+                  ramUsed: typeof data.ram_used_mb === "number" ? parseFloat((data.ram_used_mb / 1024).toFixed(2)) : 0,
+                  uptime: data.uptime_seconds || 0,
+                  version: data.minecraft_version || "Minecraft",
+                  ipAddress: prev?.ipAddress || "127.0.0.1",
+                  port: data.server_port || 25565,
+                  activePlayers: data.active_players || 0,
+                  maxPlayers: data.max_players || 20,
+                  isReachable: true,
+                }));
+                setIsPhysicalServerOnline(true);
+                consecutiveFailuresRef.current = 0;
+                break;
+              }
+              case "log_backlog": {
+                const parsed = msg.data.logs.map((item) => parseLogLine(item.line, item.index));
+                if (msg.data.logs.length > 0) {
+                  const maxIdx = msg.data.logs[msg.data.logs.length - 1].index;
+                  lastSeenLogIndexRef.current = maxIdx;
+                }
+                setLogs(parsed);
+                setIsConsoleLogsLoading(false);
+                break;
+              }
+              case "log": {
+                const item = msg.data;
+                if (item.index > lastSeenLogIndexRef.current) {
+                  lastSeenLogIndexRef.current = item.index;
+                  const parsed = parseLogLine(item.line, item.index);
+                  setLogs((prev) => {
+                    const next = [...prev, parsed];
+                    return next.length > 15000 ? next.slice(-15000) : next;
+                  });
+                }
+                break;
+              }
+              case "log_clear": {
+                lastSeenLogIndexRef.current = -1;
+                setLogs([]);
+                break;
+              }
+            }
+          } catch (e) {
+            console.error("Error parsing WS message:", e);
+          }
+        };
+
+        ws.onclose = () => {
+          if (!isMounted) return;
+          setIsWsConnected(false);
+          wsRef.current = null;
+
+          // Reconnect with exponential backoff: 1s, 2s, 4s, up to 10s
+          const delayMs = Math.min(1000 * Math.pow(2, reconnectAttemptRef.current), 10000);
+          reconnectAttemptRef.current += 1;
+          reconnectTimeoutRef.current = setTimeout(() => {
+            if (isMounted) connectWs();
+          }, delayMs);
+        };
+
+        ws.onerror = (e) => {
+          console.error("WebSocket error:", e);
+          ws.close();
+        };
+      } catch (err) {
+        console.error("Failed to establish WebSocket:", err);
+      }
+    }
+
+    connectWs();
+
+    return () => {
+      isMounted = false;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, [instanceId]);
+
+  // Handle active console subscription changes (only stream logs when console is active)
+  useEffect(() => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+    if (isConsoleActive) {
+      setIsConsoleLogsLoading(true);
+      wsRef.current.send(JSON.stringify({ type: "subscribe_logs" }));
+    } else {
+      wsRef.current.send(JSON.stringify({ type: "unsubscribe_logs" }));
+    }
+  }, [isConsoleActive]);
+
+  // Initial Load (static and slow-changing data)
   useEffect(() => {
     async function loadData() {
       try {
@@ -152,17 +309,15 @@ export function DashboardProvider({
           getInstance(instanceId).then(setInstanceDetail).catch(console.error);
         }
 
-        const [stat, initialLogs, initialPlayers, initialWhitelist, initialPlugins] =
+        const [stat, initialPlayers, initialWhitelist, initialPlugins] =
           await Promise.all([
             getServerStatus(instanceId),
-            getConsoleLogs(instanceId),
             getServerPlayers(instanceId),
             getWhitelist(instanceId),
             getPlugins(),
           ]);
 
         setStatus(stat);
-        setLogs(initialLogs);
         setPlayers(initialPlayers);
         setWhitelist(initialWhitelist);
         setPlugins(initialPlugins);
@@ -181,37 +336,6 @@ export function DashboardProvider({
       }
     }
     loadData();
-  }, [instanceId]);
-
-  // Periodic RAM, CPU, and logs Polling (2.5 seconds interval)
-  useEffect(() => {
-    const timer = setInterval(async () => {
-      try {
-        const latestStatus = await getServerStatus(instanceId);
-        setStatus(latestStatus);
-
-        if (latestStatus.isReachable === false) {
-          consecutiveFailuresRef.current += 1;
-          if (consecutiveFailuresRef.current >= 3) {
-            setIsPhysicalServerOnline(false);
-          }
-        } else {
-          consecutiveFailuresRef.current = 0;
-          setIsPhysicalServerOnline(true);
-        }
-
-        const latestLogs = await getConsoleLogs(instanceId);
-        setLogs(latestLogs);
-      } catch (err) {
-        console.error("Polling error:", err);
-        consecutiveFailuresRef.current += 1;
-        if (consecutiveFailuresRef.current >= 3) {
-          setIsPhysicalServerOnline(false);
-        }
-      }
-    }, 2500);
-
-    return () => clearInterval(timer);
   }, [instanceId]);
 
   // Power Actions Handler
@@ -248,8 +372,6 @@ export function DashboardProvider({
         setIsPhysicalServerOnline(true);
       }
 
-      const updatedLogs = await getConsoleLogs(instanceId);
-      setLogs(updatedLogs);
       const updatedPlayers = await getServerPlayers(instanceId);
       setPlayers(updatedPlayers);
       refreshAllInstances();
@@ -270,8 +392,6 @@ export function DashboardProvider({
     try {
       const res = await sendConsoleCommand(cmd, instanceId);
       setLastCommandResponse(res);
-      const updatedLogs = await getConsoleLogs(instanceId);
-      setLogs(updatedLogs);
       const updatedPlayers = await getServerPlayers(instanceId);
       setPlayers(updatedPlayers);
     } catch (err) {
@@ -292,8 +412,6 @@ export function DashboardProvider({
       setWhitelist(updatedList);
       const updatedPlayers = await getServerPlayers(instanceId);
       setPlayers(updatedPlayers);
-      const updatedLogs = await getConsoleLogs(instanceId);
-      setLogs(updatedLogs);
     } catch (err) {
       console.error("Failed to add to whitelist:", err);
     } finally {
@@ -308,8 +426,6 @@ export function DashboardProvider({
       setWhitelist(updatedList);
       const updatedPlayers = await getServerPlayers(instanceId);
       setPlayers(updatedPlayers);
-      const updatedLogs = await getConsoleLogs(instanceId);
-      setLogs(updatedLogs);
     } catch (err) {
       console.error("Failed to remove from whitelist:", err);
     }
@@ -320,8 +436,6 @@ export function DashboardProvider({
     setPlugins((prev) => prev.map((p) => (p.id === pluginId ? { ...p, enabled } : p)));
     try {
       await togglePluginState(pluginId, enabled);
-      const updatedLogs = await getConsoleLogs(instanceId);
-      setLogs(updatedLogs);
     } catch (err) {
       console.error("Failed to toggle plugin:", err);
     }
@@ -339,8 +453,6 @@ export function DashboardProvider({
       setPlayers(updatedPlayers);
       const updatedWhitelist = await getWhitelist(instanceId);
       setWhitelist(updatedWhitelist);
-      const updatedLogs = await getConsoleLogs(instanceId);
-      setLogs(updatedLogs);
     } catch (err) {
       console.error(`Failed player action ${action}:`, err);
       alert(`Action failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -361,6 +473,10 @@ export function DashboardProvider({
         isDev,
         status,
         isPhysicalServerOnline,
+        isWsConnected,
+        isConsoleActive,
+        setConsoleActive,
+        isConsoleLogsLoading,
         logs,
         players,
         whitelist,
