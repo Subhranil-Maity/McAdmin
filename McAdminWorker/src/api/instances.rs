@@ -25,11 +25,20 @@ use crate::auth::AuthUser;
 use crate::instance_config::InstanceConfig;
 use crate::instance_runtime::{IndexedLog, InstanceLogEvent, InstanceRuntime, MinecraftServerState};
 use crate::minecraft_files::{self, BannedPlayerEntry, OpEntry, WhitelistEntry};
+use crate::role_manager::{Permission, ServerPermissions};
 use crate::AppState;
 
 const RECENT_LOG_LINES: usize = 250;
 const MAX_FILE_PREVIEW_SIZE: u64 = 5 * 1024 * 1024;
 const TEMP_DIR_NAME: &str = ".tmp";
+
+#[derive(Serialize)]
+pub struct CurrentMemberPermissionsResponse {
+    pub role: String,
+    pub permissions: ServerPermissions,
+    pub is_owner: bool,
+    pub is_superuser: bool,
+}
 
 #[derive(Serialize)]
 pub struct InstanceSummary {
@@ -46,15 +55,18 @@ pub struct InstanceSummary {
     pub admins: Vec<String>,
     pub users: Vec<String>,
     pub role: String,
+    pub permissions: ServerPermissions,
     pub active_players: u32,
     pub max_players: u32,
     pub is_running: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct MemberInfo {
     pub id: String,
     pub username: String,
+    pub role: String,
+    pub permissions: ServerPermissions,
 }
 
 #[derive(Serialize)]
@@ -62,12 +74,14 @@ pub struct InstanceMembersResponse {
     pub owner: Option<MemberInfo>,
     pub admins: Vec<MemberInfo>,
     pub users: Vec<MemberInfo>,
+    pub members: Vec<MemberInfo>,
 }
 
 #[derive(Deserialize)]
 pub struct AddMemberRequest {
     pub user_id: String,
     pub role: String,
+    pub permissions: Option<ServerPermissions>,
 }
 
 #[derive(Deserialize)]
@@ -251,10 +265,10 @@ pub async fn list_instances(
         let runtime = runtime_arc.lock().await;
         let inst_id = &runtime.config.id;
 
-        let role_str = if user.is_superuser {
-            "superuser".to_string()
-        } else if let Some(role) = state.role_manager.get_role(inst_id, &user.user_id).await {
-            role.as_str().to_string()
+        let (role_str, user_permissions) = if user.is_superuser {
+            ("superuser".to_string(), ServerPermissions::all())
+        } else if user.has_instance_access(inst_id, &state.role_manager).await {
+            user.get_server_permissions(inst_id, &state.role_manager).await
         } else {
             continue;
         };
@@ -286,6 +300,7 @@ pub async fn list_instances(
             admins: if !perms.admins.is_empty() { perms.admins } else { runtime.config.admins.clone() },
             users: perms.users,
             role: role_str,
+            permissions: user_permissions,
             active_players,
             max_players,
             is_running,
@@ -534,9 +549,11 @@ pub async fn get_instance_status(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let metrics = collect_instance_metrics(&id, &runtime_arc, &state).await;
-    let recent_logs = {
+    let recent_logs = if user.has_permission(&id, Permission::LogsView, &state.role_manager).await {
         let runtime = runtime_arc.lock().await;
         runtime.logs.get_last_n_strings(RECENT_LOG_LINES)
+    } else {
+        Vec::new()
     };
 
     Ok(Json(InstanceStatusResponse {
@@ -615,14 +632,16 @@ async fn handle_instance_socket(
                         if let Ok(client_cmd) = serde_json::from_str::<ClientWsMessage>(&text) {
                             match client_cmd {
                                 ClientWsMessage::SubscribeLogs => {
-                                    logs_subscribed = true;
-                                    let backlog = {
-                                        let runtime = runtime_arc.lock().await;
-                                        runtime.logs.get_all()
-                                    };
-                                    if let Ok(json) = serde_json::to_string(&ServerWsMessage::LogBacklog { logs: &backlog }) {
-                                        if ws_sender.send(Message::Text(json.into())).await.is_err() {
-                                            break;
+                                    if user.has_permission(&id, Permission::LogsView, &state.role_manager).await {
+                                        logs_subscribed = true;
+                                        let backlog = {
+                                            let runtime = runtime_arc.lock().await;
+                                            runtime.logs.get_all()
+                                        };
+                                        if let Ok(json) = serde_json::to_string(&ServerWsMessage::LogBacklog { logs: &backlog }) {
+                                            if ws_sender.send(Message::Text(json.into())).await.is_err() {
+                                                break;
+                                            }
                                         }
                                     }
                                 }
@@ -638,12 +657,12 @@ async fn handle_instance_socket(
                                 }
                                 ClientWsMessage::Command { command } => {
                                     let clean_cmd = command.trim().trim_start_matches('/');
-                                    let can_manage = user.can_manage_instance(&id, &state.role_manager).await;
-                                    if !can_manage {
+                                    let can_command = user.has_permission(&id, Permission::ConsoleSend, &state.role_manager).await;
+                                    if !can_command {
                                         let resp = ServerWsMessage::CommandResult {
                                             status: "error",
                                             command: clean_cmd,
-                                            response: "Permission denied: admin or owner role required.",
+                                            response: "Permission denied: console:send permission required.",
                                         };
                                         if let Ok(json) = serde_json::to_string(&resp) {
                                             let _ = ws_sender.send(Message::Text(json.into())).await;
@@ -745,9 +764,7 @@ pub async fn start_instance(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::ServerStart], &state.role_manager).await?;
 
     state.instance_manager.start_instance(&id).await.map_err(|e| {
         error!("Failed to start instance: {e}");
@@ -768,12 +785,33 @@ pub async fn stop_instance(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::ServerStop], &state.role_manager).await?;
 
     state.instance_manager.stop_instance(&id).await.map_err(|e| {
         error!("Failed to stop instance: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    Ok(StatusCode::OK)
+}
+
+pub async fn restart_instance(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<StatusCode, StatusCode> {
+    let _config = state
+        .config_manager
+        .get_instance(&id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    user.require_permissions(&id, &[Permission::ServerRestart], &state.role_manager).await?;
+
+    let _ = state.instance_manager.stop_instance(&id).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+    state.instance_manager.start_instance(&id).await.map_err(|e| {
+        error!("Failed to restart instance: {e}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -792,9 +830,7 @@ pub async fn command_instance(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::ConsoleSend], &state.role_manager).await?;
 
     let command = payload.command.trim();
     if command.is_empty() {
@@ -881,6 +917,8 @@ pub async fn get_instance_members(
         state.user_manager.get_by_id(owner_id).await.map(|u| MemberInfo {
             id: u.id,
             username: u.username,
+            role: "owner".to_string(),
+            permissions: ServerPermissions::all(),
         })
     } else {
         None
@@ -889,9 +927,12 @@ pub async fn get_instance_members(
     let mut admins = Vec::new();
     for admin_id in &perms.admins {
         if let Some(u) = state.user_manager.get_by_id(admin_id).await {
+            let (r, p) = state.role_manager.get_user_permissions(&id, admin_id).await;
             admins.push(MemberInfo {
                 id: u.id,
                 username: u.username,
+                role: r,
+                permissions: p,
             });
         }
     }
@@ -899,17 +940,50 @@ pub async fn get_instance_members(
     let mut users = Vec::new();
     for uid in &perms.users {
         if let Some(u) = state.user_manager.get_by_id(uid).await {
+            let (r, p) = state.role_manager.get_user_permissions(&id, uid).await;
             users.push(MemberInfo {
                 id: u.id,
                 username: u.username,
+                role: r,
+                permissions: p,
             });
         }
     }
+
+    let mut members_map = HashMap::new();
+    if let Some(ref o) = owner {
+        members_map.insert(o.id.clone(), o.clone());
+    }
+    for a in &admins {
+        members_map.insert(a.id.clone(), a.clone());
+    }
+    for u in &users {
+        members_map.insert(u.id.clone(), u.clone());
+    }
+    for (uid, assignment) in &perms.members {
+        if !members_map.contains_key(uid) {
+            if let Some(u) = state.user_manager.get_by_id(uid).await {
+                members_map.insert(
+                    uid.clone(),
+                    MemberInfo {
+                        id: u.id,
+                        username: u.username,
+                        role: assignment.role_name.clone(),
+                        permissions: assignment.permissions,
+                    },
+                );
+            }
+        }
+    }
+
+    let mut members: Vec<MemberInfo> = members_map.into_values().collect();
+    members.sort_by(|a, b| a.username.cmp(&b.username));
 
     Ok(Json(InstanceMembersResponse {
         owner,
         admins,
         users,
+        members,
     }))
 }
 
@@ -919,23 +993,23 @@ pub async fn add_instance_member(
     Extension(user): Extension<AuthUser>,
     Json(payload): Json<AddMemberRequest>,
 ) -> Result<StatusCode, StatusCode> {
-    if !user.is_instance_owner(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::MembersManage], &state.role_manager).await?;
 
     if state.user_manager.get_by_id(&payload.user_id).await.is_none() {
         return Err(StatusCode::NOT_FOUND);
     }
 
-    match payload.role.to_lowercase().as_str() {
-        "admin" => {
-            state.role_manager.add_admin(&id, &payload.user_id).await.map_err(|_| StatusCode::BAD_REQUEST)?;
-        }
-        "user" => {
-            state.role_manager.add_user(&id, &payload.user_id).await.map_err(|_| StatusCode::BAD_REQUEST)?;
-        }
-        _ => return Err(StatusCode::BAD_REQUEST),
-    }
+    let role = payload.role.to_lowercase();
+    let perms = match payload.permissions {
+        Some(p) => p,
+        None => ServerPermissions::from_role_name(&role),
+    };
+
+    state
+        .role_manager
+        .set_member_permissions(&id, &payload.user_id, &role, perms)
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
 
     Ok(StatusCode::OK)
 }
@@ -945,8 +1019,11 @@ pub async fn remove_instance_member(
     Path((id, user_id)): Path<(String, String)>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<StatusCode, StatusCode> {
-    if !user.is_instance_owner(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
+    user.require_permissions(&id, &[Permission::MembersManage], &state.role_manager).await?;
+
+    let perms = state.role_manager.get_permissions(&id).await;
+    if perms.owner_id.as_deref() == Some(&user_id) {
+        return Err(StatusCode::BAD_REQUEST);
     }
 
     state.role_manager.remove_member(&id, &user_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -983,9 +1060,7 @@ pub async fn update_instance(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::PropertiesEdit], &state.role_manager).await?;
 
     if let Some(ram) = payload.ram_gb {
         if ram == 0 || ram > 256 {
@@ -1030,9 +1105,7 @@ pub async fn get_instance_properties(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::PropertiesView], &state.role_manager).await?;
 
     let properties_path = state.home_dir.join(&config.folder).join("server.properties");
     let content = fs::read_to_string(&properties_path).await.map_err(|e| {
@@ -1059,9 +1132,7 @@ pub async fn update_instance_properties(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::PropertiesEdit], &state.role_manager).await?;
 
     let properties_path = state.home_dir.join(&config.folder).join("server.properties");
 
@@ -1095,9 +1166,7 @@ pub async fn get_instance_players(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.has_instance_access(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::PlayersView], &state.role_manager).await?;
 
     let instance_dir = state.home_dir.join(&config.folder);
     let usercache = minecraft_files::read_usercache(&instance_dir).await;
@@ -1142,9 +1211,7 @@ pub async fn get_instance_online_players(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.has_instance_access(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::PlayersView], &state.role_manager).await?;
 
     let runtime_arc = state
         .instance_manager
@@ -1178,10 +1245,6 @@ pub async fn instance_player_action(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
     let player = body.player.trim().to_string();
     if player.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
@@ -1201,7 +1264,26 @@ pub async fn instance_player_action(
     let instance_dir = state.home_dir.join(&config.folder);
 
     match action.as_str() {
+        "kick" => {
+            user.require_permissions(&id, &[Permission::PlayersKick], &state.role_manager).await?;
+            if !is_online {
+                return Err(StatusCode::CONFLICT);
+            }
+            let cmd = match &body.reason {
+                Some(r) if !r.trim().is_empty() => format!("kick {player} {}", r.trim()),
+                _ => format!("kick {player}"),
+            };
+            let runtime = runtime_arc.lock().await;
+            runtime.rcon.execute(&cmd).await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+            Ok(Json(PlayerActionResponse {
+                status: "ok".into(),
+                method: "rcon".into(),
+                message: format!("Kicked {player}"),
+            }))
+        }
         "ban" => {
+            user.require_permissions(&id, &[Permission::PlayersBan], &state.role_manager).await?;
             if is_online {
                 let cmd = match &body.reason {
                     Some(r) if !r.trim().is_empty() => format!("ban {player} {}", r.trim()),
@@ -1235,6 +1317,7 @@ pub async fn instance_player_action(
             }))
         }
         "unban" => {
+            user.require_permissions(&id, &[Permission::PlayersBan], &state.role_manager).await?;
             if is_online {
                 let runtime = runtime_arc.lock().await;
                 runtime.rcon.execute(&format!("pardon {player}")).await.map_err(|_| StatusCode::BAD_GATEWAY)?;
@@ -1254,6 +1337,7 @@ pub async fn instance_player_action(
             }))
         }
         "whitelist" => {
+            user.require_permissions(&id, &[Permission::WhitelistManage], &state.role_manager).await?;
             if is_online {
                 let runtime = runtime_arc.lock().await;
                 runtime.rcon.execute(&format!("whitelist add {player}")).await.map_err(|_| StatusCode::BAD_GATEWAY)?;
@@ -1276,6 +1360,7 @@ pub async fn instance_player_action(
             }))
         }
         "dewhitelist" => {
+            user.require_permissions(&id, &[Permission::WhitelistManage], &state.role_manager).await?;
             if is_online {
                 let runtime = runtime_arc.lock().await;
                 runtime.rcon.execute(&format!("whitelist remove {player}")).await.map_err(|_| StatusCode::BAD_GATEWAY)?;
@@ -1295,6 +1380,7 @@ pub async fn instance_player_action(
             }))
         }
         "op" => {
+            user.require_permissions(&id, &[Permission::PlayersOp], &state.role_manager).await?;
             if is_online {
                 let runtime = runtime_arc.lock().await;
                 runtime.rcon.execute(&format!("op {player}")).await.map_err(|_| StatusCode::BAD_GATEWAY)?;
@@ -1322,6 +1408,7 @@ pub async fn instance_player_action(
             }))
         }
         "deop" => {
+            user.require_permissions(&id, &[Permission::PlayersOp], &state.role_manager).await?;
             if is_online {
                 let runtime = runtime_arc.lock().await;
                 runtime.rcon.execute(&format!("deop {player}")).await.map_err(|_| StatusCode::BAD_GATEWAY)?;
@@ -1356,9 +1443,7 @@ pub async fn list_instance_files(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::FilesRead], &state.role_manager).await?;
 
     let instance_dir = state.home_dir.join(&config.folder);
     let request_path = query.path.unwrap_or_else(|| "/".to_string());
@@ -1426,9 +1511,7 @@ pub async fn get_instance_file_content(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::FilesRead], &state.role_manager).await?;
 
     let instance_dir = state.home_dir.join(&config.folder);
     let resolved = safe_join(&instance_dir, &query.path)?;
@@ -1468,9 +1551,7 @@ pub async fn write_instance_file(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::FilesEdit], &state.role_manager).await?;
 
     let instance_dir = state.home_dir.join(&config.folder);
     let resolved = safe_join(&instance_dir, &body.path)?;
@@ -1500,9 +1581,7 @@ pub async fn upload_instance_file(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !user.can_manage_instance(&id, &state.role_manager).await {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    user.require_permissions(&id, &[Permission::FilesUpload], &state.role_manager).await?;
 
     let instance_dir = state.home_dir.join(&config.folder);
 
@@ -1542,6 +1621,68 @@ pub async fn upload_instance_file(
     Ok(Json(FileWriteResponse {
         status: "ok".into(),
         path: display_path,
+    }))
+}
+
+pub async fn delete_instance_file(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(user): Extension<AuthUser>,
+    Query(query): Query<ContentQuery>,
+) -> Result<Json<FileWriteResponse>, StatusCode> {
+    let config = state
+        .config_manager
+        .get_instance(&id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    user.require_permissions(&id, &[Permission::FilesDelete], &state.role_manager).await?;
+
+    let instance_dir = state.home_dir.join(&config.folder);
+    let resolved = safe_join(&instance_dir, &query.path)?;
+
+    if !fs::try_exists(&resolved).await.unwrap_or(false) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let meta = fs::symlink_metadata(&resolved).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if meta.is_dir() {
+        fs::remove_dir_all(&resolved).await.map_err(|e| {
+            error!("Failed to remove directory: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    } else {
+        fs::remove_file(&resolved).await.map_err(|e| {
+            error!("Failed to remove file: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    }
+
+    let display_path = normalize_display_path(&instance_dir, &resolved);
+
+    Ok(Json(FileWriteResponse {
+        status: "ok".into(),
+        path: display_path,
+    }))
+}
+
+pub async fn get_my_instance_permissions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<CurrentMemberPermissionsResponse>, StatusCode> {
+    if !user.has_instance_access(&id, &state.role_manager).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let (role, permissions) = user.get_server_permissions(&id, &state.role_manager).await;
+    let is_owner = user.is_instance_owner(&id, &state.role_manager).await;
+
+    Ok(Json(CurrentMemberPermissionsResponse {
+        role,
+        permissions,
+        is_owner,
+        is_superuser: user.is_superuser,
     }))
 }
 

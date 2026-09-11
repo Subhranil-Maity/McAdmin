@@ -13,7 +13,7 @@ use std::{
 use tower::{Layer, Service};
 use tracing::{debug, warn};
 
-use crate::role_manager::{InstanceRole, RoleManager};
+use crate::role_manager::{InstanceRole, Permission, RoleManager, ServerPermissions};
 use crate::user_manager::{UserManager, UserPermissions, UserSummary};
 
 pub const DEFAULT_JWT_SECRET: &str = "mcadmin_jwt_default_secret_change_in_production";
@@ -62,6 +62,44 @@ pub fn verify_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::e
     Ok(token_data.claims)
 }
 
+#[derive(Debug, Clone)]
+pub struct AuthError {
+    pub status: StatusCode,
+    pub message: String,
+    pub missing_permissions: Vec<String>,
+}
+
+impl IntoResponse for AuthError {
+    fn into_response(self) -> Response {
+        (
+            self.status,
+            Json(serde_json::json!({
+                "error": self.message,
+                "missing_permissions": self.missing_permissions,
+            })),
+        )
+            .into_response()
+    }
+}
+
+impl From<AuthError> for (StatusCode, Json<serde_json::Value>) {
+    fn from(err: AuthError) -> Self {
+        (
+            err.status,
+            Json(serde_json::json!({
+                "error": err.message,
+                "missing_permissions": err.missing_permissions,
+            })),
+        )
+    }
+}
+
+impl From<AuthError> for StatusCode {
+    fn from(err: AuthError) -> Self {
+        err.status
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AuthUser {
     pub user_id: String,
@@ -100,6 +138,55 @@ impl AuthUser {
             return true;
         }
         role_mgr.get_role(instance_id, &self.user_id).await.is_some()
+    }
+
+    pub async fn get_server_permissions(&self, instance_id: &str, role_mgr: &RoleManager) -> (String, ServerPermissions) {
+        if self.is_superuser {
+            return ("superuser".to_string(), ServerPermissions::all());
+        }
+        role_mgr.get_user_permissions(instance_id, &self.user_id).await
+    }
+
+    pub async fn require_permissions(
+        &self,
+        instance_id: &str,
+        required: &[Permission],
+        role_mgr: &RoleManager,
+    ) -> Result<(), AuthError> {
+        if self.is_superuser {
+            return Ok(());
+        }
+
+        let perms = role_mgr.get_permissions(instance_id).await;
+        if perms.owner_id.as_deref() == Some(&self.user_id) {
+            return Ok(());
+        }
+
+        let (_, user_perms) = role_mgr.get_user_permissions(instance_id, &self.user_id).await;
+        let mut missing = Vec::new();
+
+        for &req in required {
+            if !user_perms.has(req) {
+                missing.push(req.as_str().to_string());
+            }
+        }
+
+        if !missing.is_empty() {
+            return Err(AuthError {
+                status: StatusCode::FORBIDDEN,
+                message: format!(
+                    "Permission denied: missing required permissions: {}",
+                    missing.join(", ")
+                ),
+                missing_permissions: missing,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn has_permission(&self, instance_id: &str, required: Permission, role_mgr: &RoleManager) -> bool {
+        self.require_permissions(instance_id, &[required], role_mgr).await.is_ok()
     }
 }
 

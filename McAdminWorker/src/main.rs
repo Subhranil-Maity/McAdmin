@@ -11,12 +11,13 @@ mod user_manager;
 use api::auth::{auth_health, login, me, register};
 use api::health;
 use api::instances::{
-    add_instance_member, command_instance, create_instance, delete_instance, get_instance,
-    get_instance_file_content, get_instance_members, get_instance_online_players,
-    get_instance_players, get_instance_properties, get_instance_status, instance_player_action,
-    instance_ws_handler, list_instance_files, list_instances, remove_instance_member,
-    start_instance, stop_instance, transfer_instance_ownership, update_instance,
-    update_instance_admins, update_instance_properties, upload_instance_file, write_instance_file,
+    add_instance_member, command_instance, create_instance, delete_instance, delete_instance_file,
+    get_instance, get_instance_file_content, get_instance_members, get_instance_online_players,
+    get_instance_players, get_instance_properties, get_instance_status, get_my_instance_permissions,
+    instance_player_action, instance_ws_handler, list_instance_files, list_instances,
+    remove_instance_member, restart_instance, start_instance, stop_instance, transfer_instance_ownership,
+    update_instance, update_instance_admins, update_instance_properties, upload_instance_file,
+    write_instance_file,
 };
 use api::java_runtimes::{
     add_or_update_java_runtime, delete_java_runtime, list_java_runtimes, scan_java_runtimes,
@@ -170,10 +171,12 @@ async fn main() {
         .route("/api/instances/{id}/ws", get(instance_ws_handler))
         .route("/api/instances/{id}/start", post(start_instance))
         .route("/api/instances/{id}/stop", post(stop_instance))
+        .route("/api/instances/{id}/restart", post(restart_instance))
         .route("/api/instances/{id}/command", post(command_instance))
         // Instance members & roles
         .route("/api/instances/{id}/members", get(get_instance_members).post(add_instance_member))
         .route("/api/instances/{id}/members/{user_id}", delete(remove_instance_member))
+        .route("/api/instances/{id}/my-permissions", get(get_my_instance_permissions))
         .route("/api/instances/{id}/transfer-ownership", post(transfer_instance_ownership))
         .route("/api/instances/{id}/admins", post(update_instance_admins))
         // Instance properties & players
@@ -191,7 +194,7 @@ async fn main() {
             post(instance_player_action),
         )
         // Instance files
-        .route("/api/instances/{id}/files", get(list_instance_files))
+        .route("/api/instances/{id}/files", get(list_instance_files).delete(delete_instance_file))
         .route(
             "/api/instances/{id}/files/content",
             get(get_instance_file_content),
