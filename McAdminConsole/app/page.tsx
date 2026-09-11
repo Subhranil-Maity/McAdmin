@@ -21,10 +21,6 @@ export default function Home() {
       <main className="max-w-4xl w-full text-center space-y-12 relative z-10">
         {/* Hero Section */}
         <div className="space-y-4">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 text-emerald-400 text-xs font-semibold uppercase tracking-wider">
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>100% Self-Hosted In-House Architecture</span>
-          </div>
           <h1 className="text-4xl sm:text-6xl font-black tracking-tight bg-gradient-to-r from-white via-zinc-200 to-zinc-500 bg-clip-text text-transparent">
             Minecraft Admin Portal
           </h1>
@@ -71,48 +67,6 @@ export default function Home() {
               </Button>
             </div>
           )}
-        </div>
-
-        {/* Feature Cards / Role Details */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-6">
-          {/* Owner Role Card */}
-          <div className="rounded-2xl border border-amber-500/10 bg-zinc-900/40 p-6 space-y-4 hover:border-amber-500/20 hover:scale-[1.01] transition-all duration-300 text-left">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
-              <Shield className="w-5 h-5" />
-            </div>
-            <div className="space-y-1">
-              <h3 className="font-bold text-white text-base">OWNER</h3>
-              <p className="text-xs text-zinc-400 leading-relaxed">
-                Full instance ownership. Manage server lifecycle, edit configs, browse files, assign admin and user roles, and delete servers.
-              </p>
-            </div>
-          </div>
-
-          {/* Admin Role Card */}
-          <div className="rounded-2xl border border-purple-500/10 bg-zinc-900/40 p-6 space-y-4 hover:border-purple-500/20 hover:scale-[1.01] transition-all duration-300 text-left">
-            <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
-              <Users className="w-5 h-5" />
-            </div>
-            <div className="space-y-1">
-              <h3 className="font-bold text-white text-base">ADMIN</h3>
-              <p className="text-xs text-zinc-400 leading-relaxed">
-                Operational authority. Start, stop, restart, send console commands, edit files, and adjust RAM and Minecraft version.
-              </p>
-            </div>
-          </div>
-
-          {/* User Role Card */}
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 space-y-4 hover:border-zinc-700 hover:scale-[1.01] transition-all duration-300 text-left">
-            <div className="w-10 h-10 rounded-xl bg-zinc-800 flex items-center justify-center text-zinc-400">
-              <Key className="w-5 h-5" />
-            </div>
-            <div className="space-y-1">
-              <h3 className="font-bold text-white text-base">USER</h3>
-              <p className="text-xs text-zinc-400 leading-relaxed">
-                Player and viewer access. Monitor server metrics, online players, and live server logs with read-only protection.
-              </p>
-            </div>
-          </div>
         </div>
       </main>
 
