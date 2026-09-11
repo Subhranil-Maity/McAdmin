@@ -22,6 +22,7 @@ import {
   Move as MoveIcon,
   Edit as EditIcon,
   FolderOpen,
+  Lock,
 } from "lucide-react";
 import {
   ContextMenu,
@@ -47,6 +48,7 @@ import {
   getServerFileContent,
   writeServerFileContent,
   uploadServerFile,
+  deleteServerFile,
   FileEntry,
 } from "@/lib/mc-server";
 
@@ -128,7 +130,13 @@ function LineNumberedTextArea({ value, onChange, disabled }: LineNumberedTextAre
 }
 
 export default function FilesTab() {
-  const { instanceId } = useDashboard();
+  const {
+    instanceId,
+    canReadFiles,
+    canEditFiles,
+    canUploadFiles,
+    canDeleteFiles,
+  } = useDashboard();
   const [currentPath, setCurrentPath] = useState<string>("/");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -169,6 +177,26 @@ export default function FilesTab() {
   const showError = (msg: string) => {
     setErrorMsg(msg);
     setTimeout(() => setErrorMsg(null), 5000);
+  };
+
+  const handleDeleteFile = async (entry: FileEntry) => {
+    if (!canDeleteFiles) return;
+    const ok = window.confirm(`Are you sure you want to permanently delete "${entry.name}"?`);
+    if (!ok) return;
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    const parentPath = currentPath === "/" ? "" : currentPath;
+    const filePath = `${parentPath}/${entry.name}`;
+
+    try {
+      await deleteServerFile(filePath, instanceId);
+      showSuccess(`Deleted "${entry.name}" successfully.`);
+      fetchFiles(currentPath);
+    } catch (err) {
+      console.error(err);
+      showError(err instanceof Error ? err.message : "Failed to delete file.");
+    }
   };
 
   // Helper to update the URL query parameters
@@ -480,6 +508,21 @@ export default function FilesTab() {
     return <File className="w-4 h-4 text-zinc-500 shrink-0" />;
   };
 
+  // Check if file read permission is granted
+  if (!canReadFiles) {
+    return (
+      <Card className="border-zinc-850 bg-zinc-950 p-12 rounded-2xl flex flex-col items-center justify-center text-center space-y-4">
+        <div className="w-12 h-12 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+          <Lock className="w-6 h-6" />
+        </div>
+        <h4 className="text-white font-bold text-base">File Access Restricted</h4>
+        <p className="text-zinc-400 text-xs max-w-sm">
+          You lack the <code className="text-zinc-200 font-mono bg-zinc-900 px-1 py-0.5 rounded">files:read</code> permission required to browse or inspect server files.
+        </p>
+      </Card>
+    );
+  }
+
   // Render editor view if a file is open
   if (editingFile) {
     return (
@@ -491,7 +534,7 @@ export default function FilesTab() {
               onClick={handleCloseEditor}
               variant="outline"
               size="icon-sm"
-              className="rounded-xl border-zinc-800 bg-zinc-950/40 text-zinc-400 hover:text-white cursor-pointer"
+              className="rounded-xl border-zinc-850 bg-zinc-950/40 text-zinc-400 hover:text-white cursor-pointer"
             >
               <ArrowLeft className="w-4 h-4" />
             </Button>
@@ -519,8 +562,9 @@ export default function FilesTab() {
 
             <Button
               onClick={handleSaveFile}
-              disabled={saving}
-              className="h-9 px-4 rounded-xl text-xs font-bold bg-white text-black hover:bg-zinc-200 cursor-pointer flex items-center gap-1.5 active:scale-[0.98] transition-transform"
+              disabled={saving || !canEditFiles}
+              title={!canEditFiles ? "Permission required: files:edit" : undefined}
+              className="h-9 px-4 rounded-xl text-xs font-bold bg-white text-black hover:bg-zinc-200 cursor-pointer flex items-center gap-1.5 active:scale-[0.98] transition-transform disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {saving ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -550,7 +594,7 @@ export default function FilesTab() {
         <LineNumberedTextArea
           value={editingFile.content}
           onChange={(val) => setEditingFile({ ...editingFile, content: val })}
-          disabled={saving}
+          disabled={saving || !canEditFiles}
         />
       </div>
     );
@@ -678,8 +722,10 @@ export default function FilesTab() {
 
           <Button
             onClick={() => setIsCreatingFile(true)}
+            disabled={!canEditFiles}
+            title={!canEditFiles ? "Permission required: files:edit" : undefined}
             variant="outline"
-            className="h-9 px-3 rounded-xl text-xs font-semibold border-zinc-850 hover:bg-zinc-900/40 text-zinc-300 cursor-pointer flex items-center gap-1"
+            className="h-9 px-3 rounded-xl text-xs font-semibold border-zinc-850 hover:bg-zinc-900/40 text-zinc-300 cursor-pointer flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Plus className="w-3.5 h-3.5" />
             New File
@@ -687,8 +733,10 @@ export default function FilesTab() {
 
           <Button
             onClick={triggerUploadInput}
+            disabled={!canUploadFiles}
+            title={!canUploadFiles ? "Permission required: files:upload" : undefined}
             variant="outline"
-            className="h-9 px-3 rounded-xl text-xs font-semibold border-zinc-850 hover:bg-zinc-900/40 text-zinc-300 cursor-pointer flex items-center gap-1"
+            className="h-9 px-3 rounded-xl text-xs font-semibold border-zinc-850 hover:bg-zinc-900/40 text-zinc-300 cursor-pointer flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Upload className="w-3.5 h-3.5" />
             Upload
@@ -872,7 +920,8 @@ export default function FilesTab() {
                               </ContextMenuItem>
                               <ContextMenuItem
                                 onClick={() => triggerUploadInput()}
-                                className="cursor-pointer hover:bg-zinc-900 focus:bg-zinc-900 focus:text-white"
+                                disabled={!canUploadFiles}
+                                className="cursor-pointer hover:bg-zinc-900 focus:bg-zinc-900 focus:text-white disabled:pointer-events-none disabled:opacity-40"
                               >
                                 <Upload className="w-4 h-4 mr-2 text-zinc-500" />
                                 Upload Here
@@ -882,7 +931,7 @@ export default function FilesTab() {
                             <>
                               <ContextMenuItem
                                 onClick={() => isTextFile && handleOpenFile(entry)}
-                                disabled={!isTextFile}
+                                disabled={!isTextFile || !canEditFiles}
                                 className="cursor-pointer hover:bg-zinc-900 focus:bg-zinc-900 focus:text-white disabled:pointer-events-none disabled:opacity-40"
                               >
                                 <EditIcon className="w-4 h-4 mr-2 text-zinc-500" />
@@ -913,9 +962,17 @@ export default function FilesTab() {
                             <EditIcon className="w-4 h-4 mr-2" />
                             Rename
                           </ContextMenuItem>
-                          <ContextMenuItem disabled className="opacity-40 cursor-not-allowed text-rose-500">
+                          <ContextMenuItem
+                            onClick={() => handleDeleteFile(entry)}
+                            disabled={!canDeleteFiles}
+                            className={
+                              canDeleteFiles
+                                ? "cursor-pointer hover:bg-rose-950/30 text-rose-400 focus:bg-rose-950/40 focus:text-rose-300"
+                                : "opacity-40 cursor-not-allowed text-rose-500/50"
+                            }
+                          >
                             <Trash2 className="w-4 h-4 mr-2" />
-                            Delete
+                            Delete {canDeleteFiles ? "" : "(files:delete required)"}
                           </ContextMenuItem>
                         </ContextMenuContent>
                       </ContextMenu>

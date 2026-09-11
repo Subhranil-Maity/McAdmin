@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from "react";
 import { UserRole } from "@/types/roles";
 import { useAuth } from "@/lib/auth/auth-context";
+import { ServerPermissions, ADMIN_PERMISSIONS, VIEWER_PERMISSIONS } from "@/types/roles";
 import {
   getServerStatus,
   sendConsoleCommand,
@@ -16,6 +17,7 @@ import {
   updatePlayerStatus,
   listInstances,
   getInstance,
+  getMyInstancePermissions,
   getBackendWsUrl,
   parseLogLine,
   ServerStatus,
@@ -39,6 +41,29 @@ interface DashboardContextType {
   isDev: boolean;
   isPhysicalServerOnline: boolean;
   isWsConnected: boolean;
+
+  // Permissions
+  permissions: ServerPermissions | null;
+  refreshPermissions: () => Promise<void>;
+  canStartServer: boolean;
+  canStopServer: boolean;
+  canRestartServer: boolean;
+  canPowerServer: boolean;
+  canViewLogs: boolean;
+  canSendCommand: boolean;
+  canViewPlayers: boolean;
+  canKickPlayers: boolean;
+  canBanPlayers: boolean;
+  canOpPlayers: boolean;
+  canViewWhitelist: boolean;
+  canManageWhitelist: boolean;
+  canReadFiles: boolean;
+  canEditFiles: boolean;
+  canUploadFiles: boolean;
+  canDeleteFiles: boolean;
+  canViewProperties: boolean;
+  canEditProperties: boolean;
+  canManageMembers: boolean;
 
   // Console Streaming States
   isConsoleActive: boolean;
@@ -108,6 +133,54 @@ export function DashboardProvider({
       (instanceDetail?.admins && user && instanceDetail.admins.includes(user.id))
     ? UserRole.ADMIN
     : propUserRole || UserRole.USER;
+
+  // Permissions state
+  const [permissions, setPermissions] = useState<ServerPermissions | null>(null);
+
+  const refreshPermissions = async () => {
+    if (!instanceId) return;
+    try {
+      const res = await getMyInstancePermissions(instanceId);
+      if (res?.permissions) {
+        setPermissions(res.permissions);
+      }
+    } catch (e) {
+      console.warn("Failed to fetch instance permissions:", e);
+    }
+  };
+
+  const isPrivileged = Boolean(
+    user?.is_superuser ||
+    effectiveRole === UserRole.OWNER ||
+    effectiveRole === UserRole.SUPERUSER ||
+    isDev
+  );
+
+  const fallbackPermissions: ServerPermissions = isPrivileged || effectiveRole === UserRole.ADMIN
+    ? ADMIN_PERMISSIONS
+    : VIEWER_PERMISSIONS;
+
+  const currentPermissions: ServerPermissions = permissions || fallbackPermissions;
+
+  const canStartServer = isPrivileged || Boolean(currentPermissions.server_start || currentPermissions.server_power);
+  const canStopServer = isPrivileged || Boolean(currentPermissions.server_stop || currentPermissions.server_power);
+  const canRestartServer = isPrivileged || Boolean(currentPermissions.server_restart || currentPermissions.server_power);
+  const canPowerServer = canStartServer || canStopServer || canRestartServer;
+  const canViewLogs = isPrivileged || Boolean(currentPermissions.logs_view);
+  const canSendCommand = isPrivileged || Boolean(currentPermissions.console_send);
+  const canViewPlayers = isPrivileged || Boolean(currentPermissions.players_view);
+  const canKickPlayers = isPrivileged || Boolean(currentPermissions.players_kick);
+  const canBanPlayers = isPrivileged || Boolean(currentPermissions.players_ban);
+  const canOpPlayers = isPrivileged || Boolean(currentPermissions.players_op);
+  const canViewWhitelist = isPrivileged || Boolean(currentPermissions.whitelist_view);
+  const canManageWhitelist = isPrivileged || Boolean(currentPermissions.whitelist_manage);
+  const canReadFiles = isPrivileged || Boolean(currentPermissions.files_read);
+  const canEditFiles = isPrivileged || Boolean(currentPermissions.files_edit);
+  const canUploadFiles = isPrivileged || Boolean(currentPermissions.files_upload);
+  const canDeleteFiles = isPrivileged || Boolean(currentPermissions.files_delete);
+  const canViewProperties = isPrivileged || Boolean(currentPermissions.properties_view);
+  const canEditProperties = isPrivileged || Boolean(currentPermissions.properties_edit);
+  const canManageMembers = isPrivileged || Boolean(currentPermissions.members_manage);
 
   // Server Data States
   const [status, setStatus] = useState<ServerStatus | null>(null);
@@ -307,6 +380,7 @@ export function DashboardProvider({
 
         if (instanceId) {
           getInstance(instanceId).then(setInstanceDetail).catch(console.error);
+          refreshPermissions();
         }
 
         const [stat, initialPlayers, initialWhitelist, initialPlugins] =
@@ -377,6 +451,7 @@ export function DashboardProvider({
       refreshAllInstances();
     } catch (err) {
       console.error(`Failed to ${action} server:`, err);
+      alert(`Server power action failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setPowerActionLoading(null);
     }
@@ -396,6 +471,11 @@ export function DashboardProvider({
       setPlayers(updatedPlayers);
     } catch (err) {
       console.error("Failed to run console command:", err);
+      setLastCommandResponse({
+        command: cmd,
+        response: `Error: ${err instanceof Error ? err.message : String(err)}`,
+        status: "error",
+      });
     }
   };
 
@@ -414,6 +494,7 @@ export function DashboardProvider({
       setPlayers(updatedPlayers);
     } catch (err) {
       console.error("Failed to add to whitelist:", err);
+      alert(`Failed to add to whitelist: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setWhitelistLoading(false);
     }
@@ -428,6 +509,7 @@ export function DashboardProvider({
       setPlayers(updatedPlayers);
     } catch (err) {
       console.error("Failed to remove from whitelist:", err);
+      alert(`Failed to remove from whitelist: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -471,6 +553,27 @@ export function DashboardProvider({
         refreshAllInstances,
         userRole: effectiveRole,
         isDev,
+        permissions: currentPermissions,
+        refreshPermissions,
+        canStartServer,
+        canStopServer,
+        canRestartServer,
+        canPowerServer,
+        canViewLogs,
+        canSendCommand,
+        canViewPlayers,
+        canKickPlayers,
+        canBanPlayers,
+        canOpPlayers,
+        canViewWhitelist,
+        canManageWhitelist,
+        canReadFiles,
+        canEditFiles,
+        canUploadFiles,
+        canDeleteFiles,
+        canViewProperties,
+        canEditProperties,
+        canManageMembers,
         status,
         isPhysicalServerOnline,
         isWsConnected,

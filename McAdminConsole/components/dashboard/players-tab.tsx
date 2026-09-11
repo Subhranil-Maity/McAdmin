@@ -1,12 +1,13 @@
 "use client";
 
 import React from "react";
-import { Users, Search } from "lucide-react";
+import { Users, Search, Lock } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Player } from "@/lib/mc-server";
+import { useDashboard } from "./dashboard-context";
 
 interface PlayersTabProps {
   players: Player[];
@@ -26,6 +27,28 @@ export default function PlayersTab({
   handlePlayerAction,
   actionPlayerId,
 }: PlayersTabProps) {
+  const {
+    canViewPlayers,
+    canOpPlayers,
+    canKickPlayers,
+    canBanPlayers,
+    canManageWhitelist,
+  } = useDashboard();
+
+  if (!canViewPlayers) {
+    return (
+      <Card className="border-zinc-850 bg-zinc-950 p-12 rounded-2xl flex flex-col items-center justify-center text-center space-y-4">
+        <div className="w-12 h-12 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+          <Lock className="w-6 h-6" />
+        </div>
+        <h4 className="text-white font-bold text-base">Player Roster Restricted</h4>
+        <p className="text-zinc-400 text-xs max-w-sm">
+          You lack the <code className="text-zinc-200 font-mono bg-zinc-900 px-1 py-0.5 rounded">players:view</code> permission required to see connected and registered players.
+        </p>
+      </Card>
+    );
+  }
+
   // Filter players list
   const filteredPlayers = players.filter((p) => {
     const query = playerSearch.toLowerCase().trim();
@@ -140,8 +163,9 @@ export default function PlayersTab({
                   size="xs"
                   variant="ghost"
                   onClick={() => handlePlayerAction(player.id, player.isOp ? "deop" : "op")}
-                  disabled={actionPlayerId === player.id}
-                  className={`text-[10px] border rounded px-2 py-1 cursor-pointer transition-colors ${
+                  disabled={actionPlayerId === player.id || !canOpPlayers}
+                  title={!canOpPlayers ? "Permission required: players:op" : undefined}
+                  className={`text-[10px] border rounded px-2 py-1 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                     player.isOp 
                       ? "border-amber-500/30 hover:bg-amber-500/10 text-amber-400" 
                       : "border-zinc-800 hover:bg-zinc-800/50 text-zinc-300"
@@ -155,8 +179,9 @@ export default function PlayersTab({
                   size="xs"
                   variant="ghost"
                   onClick={() => handlePlayerAction(player.id, player.isWhitelisted ? "dewhitelist" : "whitelist")}
-                  disabled={actionPlayerId === player.id}
-                  className={`text-[10px] border rounded px-2 py-1 cursor-pointer transition-colors ${
+                  disabled={actionPlayerId === player.id || !canManageWhitelist}
+                  title={!canManageWhitelist ? "Permission required: whitelist:manage" : undefined}
+                  className={`text-[10px] border rounded px-2 py-1 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                     player.isWhitelisted 
                       ? "border-emerald-500/30 hover:bg-emerald-500/10 text-emerald-400" 
                       : "border-zinc-800 hover:bg-zinc-800/50 text-zinc-300"
@@ -170,8 +195,9 @@ export default function PlayersTab({
                   size="xs"
                   variant="ghost"
                   onClick={() => handlePlayerAction(player.id, player.isBanned ? "unban" : "ban")}
-                  disabled={actionPlayerId === player.id}
-                  className={`text-[10px] border rounded px-2 py-1 cursor-pointer transition-colors ${
+                  disabled={actionPlayerId === player.id || !canBanPlayers}
+                  title={!canBanPlayers ? "Permission required: players:ban" : undefined}
+                  className={`text-[10px] border rounded px-2 py-1 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                     player.isBanned 
                       ? "border-rose-500/30 hover:bg-rose-500/10 text-rose-400" 
                       : "border-zinc-800 hover:bg-rose-950/20 text-rose-300 hover:text-rose-400 hover:border-rose-900/40"
@@ -186,8 +212,9 @@ export default function PlayersTab({
                     size="xs"
                     variant="destructive"
                     onClick={() => handlePlayerAction(player.id, "kick")}
-                    disabled={actionPlayerId === player.id}
-                    className="text-[10px] rounded px-2 py-1 cursor-pointer"
+                    disabled={actionPlayerId === player.id || !canKickPlayers}
+                    title={!canKickPlayers ? "Permission required: players:kick" : undefined}
+                    className="text-[10px] rounded px-2 py-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Kick
                   </Button>

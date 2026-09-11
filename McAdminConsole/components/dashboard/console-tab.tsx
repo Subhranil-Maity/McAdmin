@@ -1,11 +1,12 @@
 "use client";
 
 import React from "react";
-import { Terminal, Loader2 } from "lucide-react";
+import { Terminal, Loader2, Lock, ShieldAlert } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ConsoleLog, CommandResponse } from "@/lib/mc-server";
+import { useDashboard } from "./dashboard-context";
 
 interface ConsoleTabProps {
   logs: ConsoleLog[];
@@ -16,6 +17,8 @@ interface ConsoleTabProps {
   lastCommandResponse?: CommandResponse | null;
   isConsoleLogsLoading?: boolean;
   isWsConnected?: boolean;
+  canViewLogs?: boolean;
+  canSendCommand?: boolean;
 }
 
 export default function ConsoleTab({
@@ -27,12 +30,27 @@ export default function ConsoleTab({
   lastCommandResponse,
   isConsoleLogsLoading,
   isWsConnected,
+  canViewLogs: propCanViewLogs,
+  canSendCommand: propCanSendCommand,
 }: ConsoleTabProps) {
+  const dashboard = useDashboard();
+  const canViewLogs = propCanViewLogs !== undefined ? propCanViewLogs : dashboard.canViewLogs;
+  const canSendCommand = propCanSendCommand !== undefined ? propCanSendCommand : dashboard.canSendCommand;
   return (
     <Card className="border-zinc-850 bg-zinc-950 p-4 rounded-2xl flex flex-col shadow-2xl">
       {/* Terminal Window Output */}
       <div className="h-96 overflow-y-auto font-mono text-xs text-zinc-300 space-y-1.5 p-4 rounded-xl bg-black border border-zinc-900 scrollbar-thin scrollbar-thumb-zinc-800">
-        {isConsoleLogsLoading && logs.length === 0 ? (
+        {!canViewLogs ? (
+          <div className="h-full flex flex-col items-center justify-center py-20 text-center space-y-3 select-none">
+            <div className="w-12 h-12 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+              <Lock className="w-6 h-6" />
+            </div>
+            <h4 className="text-white font-bold text-sm">Console Logs Restricted</h4>
+            <p className="text-zinc-500 text-xs max-w-sm leading-relaxed">
+              You do not have the <code className="text-zinc-300 font-mono bg-zinc-900 px-1 py-0.5 rounded">logs:view</code> permission to inspect real-time server telemetry.
+            </p>
+          </div>
+        ) : isConsoleLogsLoading && logs.length === 0 ? (
           <div className="text-zinc-400 italic flex items-center gap-2 py-2">
             <Loader2 className="w-4 h-4 animate-spin text-zinc-400" />
             <span>Retrieving logs...</span>
@@ -63,15 +81,22 @@ export default function ConsoleTab({
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 font-mono text-sm">&gt;</span>
           <Input
             type="text"
-            placeholder="Type a server command (e.g. /say Hello, /whitelist add Notch)..."
+            disabled={!canSendCommand}
+            placeholder={
+              canSendCommand
+                ? "Type a server command (e.g. /say Hello, /whitelist add Notch)..."
+                : "Command execution restricted (requires console:send permission)..."
+            }
             value={commandInput}
             onChange={(e) => setCommandInput(e.target.value)}
-            className="pl-7 bg-black border-zinc-850 rounded-xl text-zinc-200 placeholder-zinc-600 font-mono text-xs h-11 focus-visible:ring-zinc-800 focus-visible:border-zinc-800"
+            className="pl-7 bg-black border-zinc-850 rounded-xl text-zinc-200 placeholder-zinc-600 font-mono text-xs h-11 focus-visible:ring-zinc-800 focus-visible:border-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed"
           />
         </div>
         <Button
           type="submit"
-          className="px-5 rounded-xl text-xs font-semibold bg-white text-black hover:bg-zinc-200 transition-colors h-11 cursor-pointer flex items-center gap-1.5"
+          disabled={!canSendCommand || !commandInput.trim()}
+          title={!canSendCommand ? "Permission required: console:send" : undefined}
+          className="px-5 rounded-xl text-xs font-semibold bg-white text-black hover:bg-zinc-200 transition-colors h-11 cursor-pointer flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <Terminal className="w-3.5 h-3.5" />
           Send

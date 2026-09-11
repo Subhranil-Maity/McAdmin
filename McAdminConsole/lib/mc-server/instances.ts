@@ -241,15 +241,27 @@ export async function updateInstance(
   return res.json();
 }
 
+import { ServerPermissions } from "@/types/roles";
+
 export interface MemberInfo {
   id: string;
   username: string;
+  role?: string;
+  permissions?: ServerPermissions;
 }
 
 export interface InstanceMembersResponse {
   owner: MemberInfo | null;
   admins: MemberInfo[];
   users: MemberInfo[];
+  members?: MemberInfo[];
+}
+
+export interface CurrentMemberPermissionsResponse {
+  instance_id: string;
+  user_id: string;
+  role: string;
+  permissions: ServerPermissions;
 }
 
 export async function getInstanceMembers(instanceId: string): Promise<InstanceMembersResponse> {
@@ -261,16 +273,28 @@ export async function getInstanceMembers(instanceId: string): Promise<InstanceMe
   return res.json();
 }
 
+export async function getMyInstancePermissions(
+  instanceId: string
+): Promise<CurrentMemberPermissionsResponse> {
+  const base = getBackendBaseUrl();
+  const res = await apiFetch(`${base}/api/instances/${encodeURIComponent(instanceId)}/my-permissions`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch my permissions: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function addInstanceMember(
   instanceId: string,
   userId: string,
-  role: "admin" | "user"
+  role: string,
+  permissions?: ServerPermissions
 ): Promise<void> {
   const base = getBackendBaseUrl();
   const res = await apiFetch(`${base}/api/instances/${encodeURIComponent(instanceId)}/members`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user_id: userId, role }),
+    body: JSON.stringify({ user_id: userId, role, permissions }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));

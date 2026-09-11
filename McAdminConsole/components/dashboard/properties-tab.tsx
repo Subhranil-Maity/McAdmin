@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { FileText, Search, Save, Loader2, AlertCircle, CheckCircle } from "lucide-react";
+import { FileText, Search, Save, Loader2, AlertCircle, CheckCircle, Lock } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { useDashboard } from "./dashboard-context";
 import { getServerPropertiesMap, saveServerProperties } from "@/lib/mc-server";
 
 export default function PropertiesTab() {
-  const { instanceId } = useDashboard();
+  const { instanceId, canViewProperties, canEditProperties } = useDashboard();
   const [properties, setProperties] = useState<Record<string, string>>({});
   const [editedProperties, setEditedProperties] = useState<Record<string, string>>({});
   const [propertySearch, setPropertySearch] = useState("");
@@ -97,6 +97,21 @@ export default function PropertiesTab() {
     );
   }
 
+  // Check if properties view permission is granted
+  if (!canViewProperties) {
+    return (
+      <Card className="border-zinc-850 bg-zinc-950 p-12 rounded-2xl flex flex-col items-center justify-center text-center space-y-4">
+        <div className="w-12 h-12 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+          <Lock className="w-6 h-6" />
+        </div>
+        <h4 className="text-white font-bold text-base">Server Properties Restricted</h4>
+        <p className="text-zinc-400 text-xs max-w-sm">
+          You lack the <code className="text-zinc-200 font-mono bg-zinc-900 px-1 py-0.5 rounded">properties:view</code> permission required to view server configuration settings.
+        </p>
+      </Card>
+    );
+  }
+
   // Render Loading Failure / Retry Screen
   if (errorMessage && Object.keys(properties).length === 0) {
     return (
@@ -139,6 +154,15 @@ export default function PropertiesTab() {
         </div>
       )}
 
+      {!canEditProperties && (
+        <div className="flex items-center gap-3 p-3.5 rounded-xl border border-zinc-800 bg-zinc-950/60 text-zinc-400 text-xs">
+          <Lock className="w-4 h-4 text-zinc-500 shrink-0" />
+          <span>
+            Read-only mode: You lack the <code className="text-zinc-300 font-mono bg-zinc-900 px-1 py-0.5 rounded">properties:edit</code> permission to save modifications to server properties.
+          </span>
+        </div>
+      )}
+
       <Tabs defaultValue="frequent" className="w-full space-y-4">
         {/* Toolbar: Tabs Switcher and Save Action */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-900 pb-4">
@@ -149,9 +173,10 @@ export default function PropertiesTab() {
 
           <Button
             onClick={handleSaveProperties}
-            disabled={isSaving || isLoading || !isDirty}
+            disabled={isSaving || isLoading || !isDirty || !canEditProperties}
+            title={!canEditProperties ? "Permission required: properties:edit" : undefined}
             className={`h-10 px-5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md ${
-              isDirty && !isSaving && !isLoading
+              isDirty && !isSaving && !isLoading && canEditProperties
                 ? "bg-white text-black hover:bg-zinc-200 active:scale-[0.98]"
                 : "bg-zinc-900 text-zinc-500 border border-zinc-850 cursor-not-allowed"
             }`}
@@ -183,9 +208,10 @@ export default function PropertiesTab() {
                   <p className="text-[11px] text-zinc-500">The text description displayed below the server name in the multiplayer lobby list.</p>
                   <Input
                     type="text"
+                    disabled={!canEditProperties}
                     value={editedProperties["motd"] || ""}
                     onChange={(e) => handleInputChange("motd", e.target.value)}
-                    className="bg-black border-zinc-850 rounded-xl text-xs font-mono h-10 text-zinc-200 focus-visible:ring-zinc-800"
+                    className="bg-black border-zinc-850 rounded-xl text-xs font-mono h-10 text-zinc-200 focus-visible:ring-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
                     placeholder="A Minecraft Server"
                   />
                 </div>
@@ -198,6 +224,7 @@ export default function PropertiesTab() {
                   </div>
                   <div className="flex items-center h-10 pt-1">
                     <Switch
+                      disabled={!canEditProperties}
                       checked={(editedProperties["online-mode"] || "true") === "true"}
                       onCheckedChange={(checked) => handleInputChange("online-mode", checked ? "true" : "false")}
                     />
@@ -215,12 +242,13 @@ export default function PropertiesTab() {
                     type="number"
                     min={3}
                     max={32}
+                    disabled={!canEditProperties}
                     value={editedProperties["view-distance"] || "10"}
                     onChange={(e) => {
                       const val = Math.max(3, Math.min(32, parseInt(e.target.value) || 3));
                       handleInputChange("view-distance", val.toString());
                     }}
-                    className="bg-black border-zinc-850 rounded-xl text-xs font-mono h-10 text-zinc-200 focus-visible:ring-zinc-800"
+                    className="bg-black border-zinc-850 rounded-xl text-xs font-mono h-10 text-zinc-200 focus-visible:ring-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                 </div>
 
@@ -232,12 +260,13 @@ export default function PropertiesTab() {
                     type="number"
                     min={3}
                     max={32}
+                    disabled={!canEditProperties}
                     value={editedProperties["simulation-distance"] || "10"}
                     onChange={(e) => {
                       const val = Math.max(3, Math.min(32, parseInt(e.target.value) || 3));
                       handleInputChange("simulation-distance", val.toString());
                     }}
-                    className="bg-black border-zinc-850 rounded-xl text-xs font-mono h-10 text-zinc-200 focus-visible:ring-zinc-800"
+                    className="bg-black border-zinc-850 rounded-xl text-xs font-mono h-10 text-zinc-200 focus-visible:ring-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                 </div>
 
@@ -246,9 +275,10 @@ export default function PropertiesTab() {
                   <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider font-mono">Difficulty</label>
                   <p className="text-[11px] text-zinc-500">The game difficulty setting defining player damage and mob spawning behaviour.</p>
                   <select
+                    disabled={!canEditProperties}
                     value={editedProperties["difficulty"] || "easy"}
                     onChange={(e) => handleInputChange("difficulty", e.target.value)}
-                    className="bg-black border border-zinc-850 rounded-xl text-xs font-mono h-10 px-3 text-zinc-200 focus-visible:ring-zinc-800 outline-none w-full appearance-none cursor-pointer"
+                    className="bg-black border border-zinc-850 rounded-xl text-xs font-mono h-10 px-3 text-zinc-200 focus-visible:ring-zinc-800 outline-none w-full appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <option value="peaceful">Peaceful</option>
                     <option value="easy">Easy</option>
@@ -262,9 +292,10 @@ export default function PropertiesTab() {
                   <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider font-mono">Default Game Mode</label>
                   <p className="text-[11px] text-zinc-500">The default gameplay experience assigned to new players joining the server.</p>
                   <select
+                    disabled={!canEditProperties}
                     value={editedProperties["gamemode"] || "survival"}
                     onChange={(e) => handleInputChange("gamemode", e.target.value)}
-                    className="bg-black border border-zinc-850 rounded-xl text-xs font-mono h-10 px-3 text-zinc-200 focus-visible:ring-zinc-800 outline-none w-full appearance-none cursor-pointer"
+                    className="bg-black border border-zinc-850 rounded-xl text-xs font-mono h-10 px-3 text-zinc-200 focus-visible:ring-zinc-800 outline-none w-full appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <option value="survival">Survival</option>
                     <option value="creative">Creative</option>
@@ -316,9 +347,10 @@ export default function PropertiesTab() {
                       <div className="flex-1 max-w-md w-full">
                         <Input
                           type="text"
+                          disabled={!canEditProperties}
                           value={editedProperties[key]}
                           onChange={(e) => handleInputChange(key, e.target.value)}
-                          className="bg-black border-zinc-850 rounded-lg text-xs font-mono w-full h-9 text-zinc-200 focus-visible:ring-zinc-800"
+                          className="bg-black border-zinc-850 rounded-lg text-xs font-mono w-full h-9 text-zinc-200 focus-visible:ring-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
                         />
                       </div>
                     </div>

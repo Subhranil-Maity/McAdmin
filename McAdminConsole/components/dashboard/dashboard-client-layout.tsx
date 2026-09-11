@@ -40,6 +40,9 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
     powerActionLoading,
     handlePowerAction,
     userRole,
+    canStartServer,
+    canStopServer,
+    canRestartServer,
   } = useDashboard();
 
   const pathname = usePathname();
@@ -294,7 +297,8 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
               {/* Start Button */}
               <Button
                 onClick={() => handlePowerAction("start")}
-                disabled={!isServerOffline || powerActionLoading !== null}
+                disabled={!isServerOffline || powerActionLoading !== null || !canStartServer}
+                title={!canStartServer ? "Permission required: server:start" : undefined}
                 className="h-9 px-4 rounded-xl text-xs font-bold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 hover:border-emerald-500/40 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
               >
                 {powerActionLoading === "start" ? (
@@ -308,7 +312,8 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
               {/* Stop Button */}
               <Button
                 onClick={() => handlePowerAction("stop")}
-                disabled={isServerOffline || powerActionLoading !== null}
+                disabled={isServerOffline || powerActionLoading !== null || !canStopServer}
+                title={!canStopServer ? "Permission required: server:stop" : undefined}
                 className="h-9 px-4 rounded-xl text-xs font-bold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 hover:border-rose-500/40 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
               >
                 {powerActionLoading === "stop" ? (
@@ -322,7 +327,8 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
               {/* Restart Button */}
               <Button
                 onClick={() => handlePowerAction("restart")}
-                disabled={isServerOffline || powerActionLoading !== null}
+                disabled={isServerOffline || powerActionLoading !== null || !canRestartServer}
+                title={!canRestartServer ? "Permission required: server:restart" : undefined}
                 className="h-9 px-4 rounded-xl text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 hover:border-amber-500/40 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
               >
                 {powerActionLoading === "restart" ? (

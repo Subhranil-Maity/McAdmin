@@ -131,6 +131,9 @@ export async function toggleServerPower(
   const stopUrl = instanceId
     ? `${base}/api/instances/${encodeURIComponent(instanceId)}/stop`
     : `${base}/api/server/stop`;
+  const restartUrl = instanceId
+    ? `${base}/api/instances/${encodeURIComponent(instanceId)}/restart`
+    : `${base}/api/server/restart`;
 
   if (action === "start") {
     const res = await apiFetch(startUrl, { method: "POST" });
@@ -143,14 +146,9 @@ export async function toggleServerPower(
       throw new Error(`Failed to stop server: status ${res.status}`);
     }
   } else if (action === "restart") {
-    const resStop = await apiFetch(stopUrl, { method: "POST" });
-    if (!resStop.ok) {
-      throw new Error(`Failed to stop server during restart: status ${resStop.status}`);
-    }
-    await delay(2000);
-    const resStart = await apiFetch(startUrl, { method: "POST" });
-    if (!resStart.ok) {
-      throw new Error(`Failed to start server during restart: status ${resStart.status}`);
+    const res = await apiFetch(restartUrl, { method: "POST" });
+    if (!res.ok) {
+      throw new Error(`Failed to restart server: status ${res.status}`);
     }
   }
 }

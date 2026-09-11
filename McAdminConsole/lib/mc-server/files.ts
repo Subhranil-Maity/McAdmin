@@ -196,3 +196,28 @@ export async function uploadServerFile(
     xhr.send(formData);
   });
 }
+
+export async function deleteServerFile(
+  path: string,
+  instanceId?: string
+): Promise<{ status: string; path: string }> {
+  const base = getBackendBaseUrl();
+  if (!base) {
+    return { status: "ok", path };
+  }
+
+  const endpoint = instanceId
+    ? `${base}/api/instances/${encodeURIComponent(instanceId)}/files?path=${encodeURIComponent(path)}`
+    : `${base}/api/files?path=${encodeURIComponent(path)}`;
+
+  const res = await apiFetch(endpoint, {
+    method: "DELETE",
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to delete file: status ${res.status}`);
+  }
+
+  return res.json();
+}
