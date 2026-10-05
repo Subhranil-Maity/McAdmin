@@ -23,6 +23,7 @@ use tracing::error;
 
 use crate::auth::AuthUser;
 use crate::instance_config::InstanceConfig;
+use crate::instance_manager::StartOutcome;
 use crate::instance_runtime::{IndexedLog, InstanceLogEvent, InstanceRuntime, MinecraftServerState};
 use crate::minecraft_files::{self, BannedPlayerEntry, OpEntry, WhitelistEntry};
 use crate::role_manager::{Permission, ServerPermissions};
@@ -766,12 +767,15 @@ pub async fn start_instance(
 
     user.require_permissions(&id, &[Permission::ServerStart], &state.role_manager).await?;
 
-    state.instance_manager.start_instance(&id).await.map_err(|e| {
+    let outcome = state.instance_manager.start_instance(&id).await.map_err(|e| {
         error!("Failed to start instance: {e}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    Ok(StatusCode::OK)
+    Ok(match outcome {
+        StartOutcome::Started => StatusCode::OK,
+        StartOutcome::PreparingJava => StatusCode::ACCEPTED,
+    })
 }
 
 pub async fn stop_instance(

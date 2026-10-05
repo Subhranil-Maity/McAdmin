@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ServerStatus, formatUptime, updateInstance } from "@/lib/mc-server";
 import { listJavaRuntimes, JavaRuntime } from "@/lib/mc-server/java";
+import { JavaRuntimeOptions } from "@/components/dashboard/java-runtime-options";
 import { useDashboard } from "./dashboard-context";
 
 interface OverviewTabProps {
@@ -272,7 +273,7 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
                     <Coffee className="w-4 h-4 text-amber-400" /> Java Runtime Environment
                   </label>
                   <span className="text-[10px] text-zinc-500 font-mono">
-                    {javaRuntimes.length > 0 ? `${javaRuntimes.length} available` : "System PATH"}
+                    {javaRuntimes.some((r) => !r.managed) ? `${javaRuntimes.filter((r) => !r.managed).length} on host` : "Official downloads"}
                   </span>
                 </div>
                 <select
@@ -281,19 +282,10 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
                   disabled={isSaving}
                   className="w-full bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer font-mono"
                 >
-                  {javaRuntimes.map((r) => (
-                    <option key={r.id} value={r.id} className="bg-zinc-950 text-zinc-200">
-                      {r.name} {r.is_default ? "★ (Default)" : ""} {!r.is_valid ? "⚠ (Unverified)" : ""}
-                    </option>
-                  ))}
-                  {javaRuntimes.length === 0 && (
-                    <option value="" className="bg-zinc-950 text-zinc-200">
-                      System Default (java in PATH)
-                    </option>
-                  )}
+                  <JavaRuntimeOptions runtimes={javaRuntimes} />
                 </select>
                 <p className="text-[11px] text-zinc-500 leading-relaxed">
-                  Select the Java executable used to launch this Minecraft instance. Defined in <code className="text-zinc-400 font-mono">java_runtimes.json</code>.
+                  Select the Java executable used to launch this Minecraft instance. Official Eclipse Temurin runtimes are downloaded automatically on first start (progress shown in the console).
                 </p>
               </div>
             </div>

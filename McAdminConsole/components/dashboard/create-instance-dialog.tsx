@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createInstance, InstanceSummary } from "@/lib/mc-server";
 import { listJavaRuntimes, JavaRuntime } from "@/lib/mc-server/java";
+import { JavaRuntimeOptions } from "@/components/dashboard/java-runtime-options";
 import { useAuth } from "@/lib/auth/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -229,7 +230,7 @@ export default function CreateInstanceDialog({
                   <Coffee className="w-3.5 h-3.5 text-amber-400" /> Java Runtime Environment
                 </span>
                 <span className="text-[10px] text-zinc-500 font-mono">
-                  {javaRuntimes.length > 0 ? `${javaRuntimes.length} detected` : "System PATH"}
+                  {javaRuntimes.some((r) => !r.managed) ? `${javaRuntimes.filter((r) => !r.managed).length} on host` : "Official downloads"}
                 </span>
               </label>
               <select
@@ -238,16 +239,7 @@ export default function CreateInstanceDialog({
                 disabled={isLoading || loadingRuntimes}
                 className="w-full bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer font-mono"
               >
-                {javaRuntimes.map((r) => (
-                  <option key={r.id} value={r.id} className="bg-zinc-950 text-zinc-200">
-                    {r.name} {r.is_default ? "★ (Default)" : ""} {!r.is_valid ? "⚠" : ""}
-                  </option>
-                ))}
-                {javaRuntimes.length === 0 && (
-                  <option value="" className="bg-zinc-950 text-zinc-200">
-                    System Default (java in PATH)
-                  </option>
-                )}
+                <JavaRuntimeOptions runtimes={javaRuntimes} />
               </select>
             </div>
 

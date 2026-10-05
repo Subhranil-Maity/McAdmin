@@ -7,6 +7,10 @@ export interface JavaRuntime {
   is_default: boolean;
   version_detected?: string;
   is_valid: boolean;
+  /** Official Eclipse Temurin runtime downloaded by the worker on first start. */
+  managed?: boolean;
+  /** For managed runtimes: already downloaded to the worker. */
+  installed?: boolean;
 }
 
 export async function listJavaRuntimes(): Promise<JavaRuntime[]> {
@@ -29,6 +33,24 @@ export async function listJavaRuntimes(): Promise<JavaRuntime[]> {
         version_detected: "21.0.6",
         is_valid: true,
       },
+      {
+        id: "temurin-auto",
+        name: "Recommended for Minecraft version (Eclipse Temurin)",
+        path: "auto",
+        is_default: false,
+        is_valid: true,
+        managed: true,
+        installed: false,
+      },
+      ...[8, 17, 21, 25].map((major) => ({
+        id: `temurin-${major}`,
+        name: `Eclipse Temurin JRE ${major} (official)`,
+        path: `java/temurin-${major}/bin/java`,
+        is_default: false,
+        is_valid: true,
+        managed: true,
+        installed: false,
+      })),
     ];
   }
 

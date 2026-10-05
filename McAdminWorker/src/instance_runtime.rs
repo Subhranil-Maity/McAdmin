@@ -201,6 +201,12 @@ impl InstanceRuntime {
         // Clear previous logs on server start so each start only shows its own logs
         self.logs.clear();
 
+        self.launch(java_bin).await
+    }
+
+    /// Spawns the server process. Unlike `start`, this neither checks the current
+    /// state nor clears logs, so it can follow a Java download in the `Starting` state.
+    pub async fn launch(&mut self, java_bin: &str) -> io::Result<()> {
         let jar_path = self.instance_dir.join(&self.config.jar_name);
         if !jar_path.exists() {
             return Err(io::Error::new(

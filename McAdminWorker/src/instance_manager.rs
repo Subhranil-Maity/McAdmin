@@ -8,8 +8,18 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::instance_config::{InstanceConfig, McConfigManager};
-use crate::instance_runtime::{InstanceRuntime, monitor_instance};
-use crate::java_manager::JavaManager;
+use crate::instance_runtime::{InstanceRuntime, MinecraftServerState, monitor_instance};
+use crate::java_download;
+use crate::java_manager::{JavaManager, ResolvedJava};
+
+/// How a start request was handled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartOutcome {
+    /// The server process was launched.
+    Started,
+    /// A managed Java runtime is being downloaded; the server launches afterwards.
+    PreparingJava,
+}
 
 pub struct InstanceManager {
     home_dir: PathBuf,
@@ -177,16 +187,32 @@ impl InstanceManager {
         Ok(())
     }
 
-    pub async fn start_instance(&self, id: &str) -> io::Result<()> {
+    pub async fn start_instance(&self, id: &str) -> io::Result<StartOutcome> {
         let runtime_arc = self.get(id).await.ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "Instance not found")
         })?;
 
-        let java_bin = {
+        let resolved = {
             let runtime = runtime_arc.lock().await;
             self.java_manager
-                .resolve_executable(runtime.config.java_runtime.as_deref())
+                .resolve(
+                    runtime.config.java_runtime.as_deref(),
+                    runtime.config.minecraft_version.as_deref(),
+                )
                 .await
+        };
+
+        let java_bin = match resolved {
+            ResolvedJava::Path(path) => path,
+            ResolvedJava::Managed(major) if java_download::is_installed(&self.home_dir, major).await => {
+                java_download::managed_java_bin(&self.home_dir, major)
+                    .to_string_lossy()
+                    .to_string()
+            }
+            ResolvedJava::Managed(major) => {
+                self.start_with_java_download(runtime_arc, major).await?;
+                return Ok(StartOutcome::PreparingJava);
+            }
         };
 
         {
@@ -195,6 +221,60 @@ impl InstanceManager {
         }
 
         tokio::spawn(monitor_instance(runtime_arc));
+        Ok(StartOutcome::Started)
+    }
+
+    /// Puts the instance in `Starting`, downloads the managed JRE in the background
+    /// (progress goes to the instance console), then launches the server.
+    async fn start_with_java_download(
+        &self,
+        runtime_arc: Arc<TokioMutex<InstanceRuntime>>,
+        major: u32,
+    ) -> io::Result<()> {
+        let logs = {
+            let mut runtime = runtime_arc.lock().await;
+            if runtime.state != MinecraftServerState::Offline {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "Server is already running or starting",
+                ));
+            }
+            runtime.logs.clear();
+            runtime.state = MinecraftServerState::Starting;
+            runtime.logs.clone()
+        };
+
+        let home_dir = self.home_dir.clone();
+        tokio::spawn(async move {
+            let result = java_download::ensure_installed(&home_dir, major, |line| {
+                logs.push(line);
+            })
+            .await;
+
+            let mut runtime = runtime_arc.lock().await;
+            if runtime.state != MinecraftServerState::Starting {
+                // Stopped while downloading.
+                return;
+            }
+
+            match result {
+                Ok(bin) => {
+                    if let Err(e) = runtime.launch(&bin.to_string_lossy()).await {
+                        error!("Failed to launch instance '{}': {e}", runtime.config.name);
+                        runtime.state = MinecraftServerState::Offline;
+                        return;
+                    }
+                    drop(runtime);
+                    monitor_instance(runtime_arc).await;
+                }
+                Err(e) => {
+                    error!("Java {major} install failed for '{}': {e}", runtime.config.name);
+                    runtime.logs.push(format!("[ERROR] [Java] {e}"));
+                    runtime.state = MinecraftServerState::Offline;
+                }
+            }
+        });
+
         Ok(())
     }
 

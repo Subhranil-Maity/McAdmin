@@ -3,6 +3,7 @@ mod auth;
 mod instance_config;
 mod instance_manager;
 mod instance_runtime;
+mod java_download;
 mod java_manager;
 mod minecraft_files;
 mod role_manager;
@@ -105,7 +106,7 @@ async fn main() {
 
     let java_runtimes_path = home_dir.join("java_runtimes.json");
     let java_manager = Arc::new(
-        JavaManager::load(java_runtimes_path)
+        JavaManager::load(java_runtimes_path, (*home_dir).clone())
             .await
             .expect("Failed to load JavaManager"),
     );

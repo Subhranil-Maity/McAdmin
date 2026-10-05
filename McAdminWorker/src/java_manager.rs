@@ -6,6 +6,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
+use crate::java_download::{self, ManagedSelection, MANAGED_AUTO_ID, MANAGED_MAJORS, MANAGED_PREFIX};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JavaRuntime {
     pub id: String,
@@ -23,17 +25,39 @@ pub struct JavaRuntimeInfo {
     pub is_default: bool,
     pub version_detected: Option<String>,
     pub is_valid: bool,
+    /// Official Temurin runtime that the worker downloads on demand.
+    #[serde(default)]
+    pub managed: bool,
+    /// For managed runtimes: whether it has already been downloaded.
+    #[serde(default)]
+    pub installed: bool,
+}
+
+/// Result of resolving an instance's Java selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedJava {
+    /// An executable path (or `java` on PATH) ready to launch.
+    Path(String),
+    /// A managed Temurin runtime of this major version (may need downloading).
+    Managed(u32),
+}
+
+pub fn is_managed_id(id: &str) -> bool {
+    id.trim().starts_with(MANAGED_PREFIX)
 }
 
 #[derive(Debug)]
 pub struct JavaManager {
     path: PathBuf,
+    home_dir: PathBuf,
     runtimes: Mutex<Vec<JavaRuntime>>,
 }
 
 impl JavaManager {
-    pub async fn load(path: impl Into<PathBuf>) -> io::Result<Self> {
+    pub async fn load(path: impl Into<PathBuf>, home_dir: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
+        let home_dir = home_dir.into();
+        tokio::fs::create_dir_all(java_download::java_root(&home_dir)).await?;
 
         let runtimes = if tokio::fs::try_exists(&path).await.unwrap_or(false) {
             let content = tokio::fs::read_to_string(&path).await?;
@@ -61,6 +85,7 @@ impl JavaManager {
 
         Ok(Self {
             path,
+            home_dir,
             runtimes: Mutex::new(runtimes),
         })
     }
@@ -103,9 +128,75 @@ impl JavaManager {
                 is_default: r.is_default,
                 version_detected,
                 is_valid,
+                managed: false,
+                installed: false,
+            });
+        }
+
+        results.push(JavaRuntimeInfo {
+            id: MANAGED_AUTO_ID.to_string(),
+            name: "Recommended for Minecraft version (Eclipse Temurin)".to_string(),
+            path: "auto".to_string(),
+            is_default: false,
+            version_detected: None,
+            is_valid: true,
+            managed: true,
+            installed: false,
+        });
+        for major in MANAGED_MAJORS {
+            let release = java_download::installed_release(&self.home_dir, major).await;
+            results.push(JavaRuntimeInfo {
+                id: format!("{MANAGED_PREFIX}{major}"),
+                name: format!("Eclipse Temurin JRE {major} (official)"),
+                path: java_download::managed_java_bin(&self.home_dir, major)
+                    .to_string_lossy()
+                    .to_string(),
+                is_default: false,
+                installed: release.is_some(),
+                version_detected: release,
+                is_valid: true,
+                managed: true,
             });
         }
         results
+    }
+
+    pub fn home_dir(&self) -> &Path {
+        &self.home_dir
+    }
+
+    /// Resolves an instance's Java selection. Existing (host) selections resolve
+    /// exactly as before; only `temurin-*` ids, or a host with no usable `java`
+    /// at all, resolve to a managed runtime.
+    pub async fn resolve(
+        &self,
+        runtime_id_or_path: Option<&str>,
+        minecraft_version: Option<&str>,
+    ) -> ResolvedJava {
+        let recommended = || java_download::recommended_major(minecraft_version);
+
+        if let Some(sel) = runtime_id_or_path.and_then(java_download::parse_managed_id) {
+            return ResolvedJava::Managed(match sel {
+                ManagedSelection::Auto => recommended(),
+                ManagedSelection::Major(m) => m,
+            });
+        }
+
+        let path = self.resolve_executable(runtime_id_or_path).await;
+        if path == "java" && !Self::java_on_path().await {
+            // No host Java at all: fall back to the official recommended runtime.
+            return ResolvedJava::Managed(recommended());
+        }
+        ResolvedJava::Path(path)
+    }
+
+    async fn java_on_path() -> bool {
+        tokio::process::Command::new("which")
+            .arg("java")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 
     pub async fn resolve_executable(&self, runtime_id_or_path: Option<&str>) -> String {

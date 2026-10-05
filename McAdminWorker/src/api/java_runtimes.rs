@@ -6,7 +6,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::auth::AuthUser;
-use crate::java_manager::{JavaRuntime, JavaRuntimeInfo};
+use crate::java_manager::{JavaRuntime, JavaRuntimeInfo, is_managed_id};
 use crate::AppState;
 
 #[derive(Deserialize)]
@@ -69,6 +69,11 @@ pub async fn add_or_update_java_runtime(
             )
         });
 
+    // Managed (official Temurin) ids are built in and can't be overridden.
+    if is_managed_id(&id) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let runtime = JavaRuntime {
         id,
         name: name.to_string(),
@@ -89,6 +94,10 @@ pub async fn delete_java_runtime(
 ) -> Result<StatusCode, StatusCode> {
     if !user.is_superuser {
         return Err(StatusCode::FORBIDDEN);
+    }
+
+    if is_managed_id(&id) {
+        return Err(StatusCode::BAD_REQUEST);
     }
 
     match state.java_manager.delete(&id).await {
