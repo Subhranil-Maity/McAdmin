@@ -99,6 +99,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
 
   const isServerOnline = status?.status === "ONLINE";
   const isServerOffline = status?.status === "OFFLINE";
+  const isServerStopping = status?.status === "STOPPING";
 
   const serverName = instanceDetail?.name || "Minecraft Server";
 
@@ -162,7 +163,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
                         className={`w-1.5 h-1.5 rounded-full ${
                           inst.status === "ONLINE"
                             ? "bg-emerald-400 shadow-[0_0_6px_#10b981]"
-                            : inst.status === "STARTING"
+                            : inst.status === "STARTING" || inst.status === "STOPPING"
                             ? "bg-amber-400"
                             : "bg-rose-400"
                         }`}
@@ -250,6 +251,8 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
                   }`
                 : status?.status === "STARTING"
                 ? "Starting Minecraft server process..."
+                : status?.status === "STOPPING"
+                ? "Stopping server (saving world)..."
                 : "Server is offline"}
             </p>
           </div>
@@ -312,7 +315,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
               {/* Stop Button */}
               <Button
                 onClick={() => handlePowerAction("stop")}
-                disabled={isServerOffline || powerActionLoading !== null || !canStopServer}
+                disabled={isServerOffline || isServerStopping || powerActionLoading !== null || !canStopServer}
                 title={!canStopServer ? "Permission required: server:stop" : undefined}
                 className="h-9 px-4 rounded-xl text-xs font-bold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 hover:border-rose-500/40 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
               >
@@ -327,7 +330,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
               {/* Restart Button */}
               <Button
                 onClick={() => handlePowerAction("restart")}
-                disabled={isServerOffline || powerActionLoading !== null || !canRestartServer}
+                disabled={isServerOffline || isServerStopping || powerActionLoading !== null || !canRestartServer}
                 title={!canRestartServer ? "Permission required: server:restart" : undefined}
                 className="h-9 px-4 rounded-xl text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 hover:border-amber-500/40 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
               >

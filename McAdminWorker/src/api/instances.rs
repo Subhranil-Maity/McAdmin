@@ -834,8 +834,8 @@ pub async fn restart_instance(
 
     user.require_permissions(&id, &[Permission::ServerRestart], &state.role_manager).await?;
 
+    // stop_instance returns once the server has saved and exited.
     let _ = state.instance_manager.stop_instance(&id).await;
-    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
     state.instance_manager.start_instance(&id).await.map_err(|e| {
         error!("Failed to restart instance: {e}");
         StatusCode::INTERNAL_SERVER_ERROR

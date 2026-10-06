@@ -3,14 +3,23 @@ use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock};
-use tracing::{error, info};
+use tokio::time::{Instant, sleep};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::instance_config::{InstanceConfig, McConfigManager};
 use crate::instance_runtime::{InstanceRuntime, MinecraftServerState, monitor_instance};
 use crate::java_download;
 use crate::java_manager::{JavaManager, ResolvedJava};
+
+/// How long a server gets to save and exit after `stop` before it is killed.
+pub const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(60);
+/// Shorter timeout when the instance is being deleted anyway.
+const DELETE_STOP_TIMEOUT: Duration = Duration::from_secs(15);
+const STOP_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// How a start request was handled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,8 +178,9 @@ impl InstanceManager {
         };
 
         if let Some(runtime_arc) = runtime_opt {
+            graceful_stop(&runtime_arc, DELETE_STOP_TIMEOUT).await;
             let mut runtime = runtime_arc.lock().await;
-            runtime.deallocate_all().await;
+            runtime.force_kill().await;
 
             let dir = runtime.instance_dir.clone();
             drop(runtime);
@@ -278,13 +288,101 @@ impl InstanceManager {
         Ok(())
     }
 
+    /// Gracefully stops an instance: sends `stop`, waits for the server to save
+    /// and exit, and kills it only if it is still running after the timeout.
     pub async fn stop_instance(&self, id: &str) -> io::Result<()> {
         let runtime_arc = self.get(id).await.ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "Instance not found")
         })?;
 
-        let mut runtime = runtime_arc.lock().await;
-        runtime.stop().await?;
+        graceful_stop(&runtime_arc, GRACEFUL_STOP_TIMEOUT).await;
         Ok(())
+    }
+
+    /// Gracefully stops every running instance in parallel (worker shutdown).
+    pub async fn stop_all(&self) {
+        let runtimes = self.list().await;
+        futures_util::future::join_all(
+            runtimes
+                .iter()
+                .map(|runtime| graceful_stop(runtime, GRACEFUL_STOP_TIMEOUT)),
+        )
+        .await;
+    }
+}
+
+/// Sends `stop` to the server console and waits up to `timeout` for it to exit,
+/// falling back to a kill. The instance lock is only held briefly at each step,
+/// so status/WebSocket/metrics keep working while the server shuts down.
+async fn graceful_stop(runtime_arc: &Arc<TokioMutex<InstanceRuntime>>, timeout: Duration) {
+    let (name, stdin, rcon, logs) = {
+        let mut runtime = runtime_arc.lock().await;
+        if runtime.child.is_none() {
+            // Not running (or still downloading Java): nothing to shut down.
+            runtime.mark_exited().await;
+            return;
+        }
+        if runtime.state == MinecraftServerState::Stopping {
+            // A stop is already in progress; don't send `stop` twice.
+            drop(runtime);
+            wait_for_exit(runtime_arc, timeout).await;
+            return;
+        }
+        runtime.state = MinecraftServerState::Stopping;
+        (
+            runtime.config.name.clone(),
+            runtime.stdin.take(),
+            runtime.rcon.clone(),
+            runtime.logs.clone(),
+        )
+    };
+
+    info!("Stopping Minecraft instance '{name}' gracefully");
+    logs.push("[McAdmin] Sending \"stop\" to server...".to_string());
+
+    let sent_via_stdin = match stdin {
+        Some(mut stdin) => stdin.write_all(b"stop\n").await.is_ok() && stdin.flush().await.is_ok(),
+        None => false,
+    };
+    if !sent_via_stdin {
+        warn!("Could not write to console of '{name}'; sending stop via RCON");
+        if let Err(e) = rcon.execute("stop").await {
+            warn!("RCON stop for '{name}' failed: {e}");
+            logs.push(format!("[McAdmin] Could not send \"stop\" (console and RCON failed: {e})"));
+        }
+    }
+
+    if wait_for_exit(runtime_arc, timeout).await {
+        logs.push("[McAdmin] Server stopped.".to_string());
+        return;
+    }
+
+    warn!("Instance '{name}' did not stop within {}s; killing it", timeout.as_secs());
+    logs.push(format!(
+        "[McAdmin] Server did not stop within {}s; killing process",
+        timeout.as_secs()
+    ));
+    runtime_arc.lock().await.force_kill().await;
+}
+
+/// Polls until the server process has exited. Returns false on timeout.
+async fn wait_for_exit(runtime_arc: &Arc<TokioMutex<InstanceRuntime>>, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        {
+            let mut runtime = runtime_arc.lock().await;
+            let exited = match runtime.child.as_mut() {
+                None => true,
+                Some(child) => !matches!(child.try_wait(), Ok(None)),
+            };
+            if exited {
+                runtime.mark_exited().await;
+                return true;
+            }
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        sleep(STOP_POLL_INTERVAL).await;
     }
 }

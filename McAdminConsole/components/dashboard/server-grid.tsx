@@ -182,7 +182,9 @@ export default function ServerGrid({
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
       {instances.map((instance) => {
         const isOnline = instance.status === "ONLINE";
-        const isStarting = instance.status === "STARTING";
+        const isStopping = instance.status === "STOPPING";
+        // Starting or stopping: shown in amber with power actions disabled.
+        const isStarting = instance.status === "STARTING" || isStopping;
         const isOffline = instance.status === "OFFLINE";
 
         const canManage = canManageInstance(instance);
@@ -351,7 +353,7 @@ export default function ServerGrid({
                   ) : (
                     <Button
                       onClick={() => handlePower(instance.id, "stop")}
-                      disabled={actionLoadingId !== null}
+                      disabled={actionLoadingId !== null || isStopping}
                       className="h-9 px-3 rounded-xl text-xs font-bold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 cursor-pointer"
                       title="Stop Server"
                     >

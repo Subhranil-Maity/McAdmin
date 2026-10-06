@@ -47,7 +47,10 @@ export async function getServerStatus(instanceId?: string): Promise<ServerStatus
     const data = await res.json();
 
     const statusState: ServerStatusState =
-      data.status === "ONLINE" || data.status === "OFFLINE" || data.status === "STARTING"
+      data.status === "ONLINE" ||
+      data.status === "OFFLINE" ||
+      data.status === "STARTING" ||
+      data.status === "STOPPING"
         ? data.status
         : "OFFLINE";
 

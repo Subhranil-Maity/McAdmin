@@ -1,4 +1,4 @@
-export type ServerStatusState = "ONLINE" | "OFFLINE" | "STARTING";
+export type ServerStatusState = "ONLINE" | "OFFLINE" | "STARTING" | "STOPPING";
 
 export interface ServerStatus {
   status: ServerStatusState;

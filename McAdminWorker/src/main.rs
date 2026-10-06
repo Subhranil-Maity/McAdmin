@@ -121,6 +121,8 @@ async fn main() {
         .await,
     );
 
+    let shutdown_instances = instance_manager.clone();
+
     let metrics = Arc::new(metrics_collector::MetricsStore::new());
     metrics_collector::spawn(instance_manager.clone(), metrics.clone());
 
@@ -227,9 +229,41 @@ async fn main() {
 
     info!("listening on {}", bind_addr);
 
-    axum::serve(listener, app)
-        .await
-        .expect("failed to start Axum server");
+    // On Ctrl-C / SIGTERM, stop all Minecraft servers gracefully (so worlds are
+    // saved) before the worker exits. Not using axum's graceful shutdown, since it
+    // would wait on long-lived WebSocket connections.
+    tokio::select! {
+        result = axum::serve(listener, app) => {
+            result.expect("failed to start Axum server");
+        }
+        _ = shutdown_signal() => {
+            info!("Shutdown signal received; stopping all Minecraft instances...");
+            shutdown_instances.stop_all().await;
+            info!("All instances stopped; exiting");
+        }
+    }
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
 }
 
 fn cors_layer() -> CorsLayer {

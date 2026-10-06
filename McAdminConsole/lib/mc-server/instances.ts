@@ -3,7 +3,7 @@ import { getBackendBaseUrl, apiFetch, getAuthToken } from "./utils";
 export interface InstanceSummary {
   id: string;
   name: string;
-  status: "ONLINE" | "OFFLINE" | "STARTING";
+  status: "ONLINE" | "OFFLINE" | "STARTING" | "STOPPING";
   server_port: number;
   rcon_port: number;
   ram_gb: number;

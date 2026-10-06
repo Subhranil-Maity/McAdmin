@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::process::{Child, Command};
+use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::broadcast;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::{Duration, sleep, timeout};
@@ -147,6 +147,8 @@ pub enum MinecraftServerState {
     Offline,
     Starting,
     Online,
+    /// `stop` was sent; waiting for the process to exit.
+    Stopping,
 }
 
 impl MinecraftServerState {
@@ -155,6 +157,7 @@ impl MinecraftServerState {
             Self::Offline => "OFFLINE",
             Self::Starting => "STARTING",
             Self::Online => "ONLINE",
+            Self::Stopping => "STOPPING",
         }
     }
 }
@@ -164,6 +167,8 @@ pub struct InstanceRuntime {
     pub state: MinecraftServerState,
     pub process_id: Option<u32>,
     pub child: Option<Child>,
+    /// Server console input, used to send `stop` for a graceful shutdown.
+    pub stdin: Option<ChildStdin>,
     pub logs: LogBuffer,
     pub rcon: Arc<RconManager>,
     pub instance_dir: PathBuf,
@@ -184,6 +189,7 @@ impl InstanceRuntime {
             state: MinecraftServerState::Offline,
             process_id: None,
             child: None,
+            stdin: None,
             logs: LogBuffer::new(LOG_BUFFER_CAPACITY),
             rcon: Arc::new(RconManager::new(rcon_config)),
             instance_dir,
@@ -239,7 +245,7 @@ impl InstanceRuntime {
             .arg("-jar")
             .arg(&jar_path)
             .arg("--nogui")
-            .stdin(Stdio::inherit())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn();
@@ -263,6 +269,7 @@ impl InstanceRuntime {
             spawn_log_reader(stderr, self.logs.clone(), Some("[ERROR] "));
         }
 
+        self.stdin = child.stdin.take();
         self.state = MinecraftServerState::Online;
         self.process_id = process_id;
         self.child = Some(child);
@@ -270,27 +277,24 @@ impl InstanceRuntime {
         Ok(())
     }
 
-    /// Stops the server and deallocates process and RCON socket resources.
-    pub async fn stop(&mut self) -> io::Result<()> {
-        info!("Stopping Minecraft instance '{}'", self.config.name);
-
+    /// Resets process state after the server process has exited (or was killed).
+    pub async fn mark_exited(&mut self) {
         self.state = MinecraftServerState::Offline;
         self.process_id = None;
+        self.child = None;
+        self.stdin = None;
+        self.rcon.disconnect().await;
+    }
 
+    /// Kills the server process immediately (SIGKILL) without saving.
+    /// Only a fallback: use `InstanceManager::stop_instance` for a graceful stop.
+    pub async fn force_kill(&mut self) {
         if let Some(mut child) = self.child.take() {
+            info!("Killing Minecraft instance '{}'", self.config.name);
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
-
-        // Deallocate RCON connection and close socket
-        self.rcon.disconnect().await;
-
-        Ok(())
-    }
-
-    /// Complete cleanup when instance is deleted
-    pub async fn deallocate_all(&mut self) {
-        let _ = self.stop().await;
+        self.mark_exited().await;
     }
 }
 
@@ -336,10 +340,7 @@ pub async fn monitor_instance(instance: Arc<TokioMutex<InstanceRuntime>>) {
                     runtime.config.name,
                     status.code()
                 );
-                runtime.state = MinecraftServerState::Offline;
-                runtime.process_id = None;
-                runtime.child = None;
-                runtime.rcon.disconnect().await;
+                runtime.mark_exited().await;
                 return;
             }
             Some(Err(error)) => {
@@ -348,10 +349,7 @@ pub async fn monitor_instance(instance: Arc<TokioMutex<InstanceRuntime>>) {
                     "Instance '{}' status check failed: {error}",
                     runtime.config.name
                 );
-                runtime.state = MinecraftServerState::Offline;
-                runtime.process_id = None;
-                runtime.child = None;
-                runtime.rcon.disconnect().await;
+                runtime.mark_exited().await;
                 return;
             }
             None => {}

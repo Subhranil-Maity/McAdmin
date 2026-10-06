@@ -480,10 +480,9 @@ export function DashboardProvider({
     try {
       if (action === "start") {
         setStatus((prev) => (prev ? { ...prev, status: "STARTING" } : null));
-      } else if (action === "stop") {
-        setStatus((prev) => (prev ? { ...prev, status: "OFFLINE", cpu: 0, ramUsed: 0 } : null));
-      } else if (action === "restart") {
-        setStatus((prev) => (prev ? { ...prev, status: "STARTING" } : null));
+      } else {
+        // Stop and restart both begin with a graceful stop (server saves, then exits).
+        setStatus((prev) => (prev ? { ...prev, status: "STOPPING" } : null));
       }
 
       await toggleServerPower(action, instanceId);
