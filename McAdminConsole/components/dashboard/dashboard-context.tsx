@@ -18,6 +18,7 @@ import {
   listInstances,
   getInstance,
   getMyInstancePermissions,
+  getMetricsHistory,
   getBackendWsUrl,
   parseLogLine,
   ServerStatus,
@@ -29,7 +30,23 @@ import {
   InstanceSummary,
   InstanceDetail,
   ServerWsMessage,
+  MetricSample,
 } from "@/lib/mc-server";
+
+/** Points kept for the Overview sparklines (one per second). */
+export const METRICS_WINDOW = 60;
+
+export interface MetricPoint {
+  t: number;
+  cpu: number;
+  ramGb: number;
+}
+
+const toMetricPoint = (s: MetricSample): MetricPoint => ({
+  t: s.t,
+  cpu: s.cpu,
+  ramGb: s.ram_mb / 1024,
+});
 
 interface DashboardContextType {
   instanceId?: string;
@@ -72,6 +89,8 @@ interface DashboardContextType {
 
   // Server Data States
   status: ServerStatus | null;
+  /** Last ~60s of CPU/RAM samples, oldest first. */
+  metricsHistory: MetricPoint[];
   logs: ConsoleLog[];
   players: Player[];
   whitelist: WhitelistEntry[];
@@ -184,6 +203,7 @@ export function DashboardProvider({
 
   // Server Data States
   const [status, setStatus] = useState<ServerStatus | null>(null);
+  const [metricsHistory, setMetricsHistory] = useState<MetricPoint[]>([]);
   const [isPhysicalServerOnline, setIsPhysicalServerOnline] = useState(true);
   const consecutiveFailuresRef = useRef(0);
   const [logs, setLogs] = useState<ConsoleLog[]>([]);
@@ -244,7 +264,13 @@ export function DashboardProvider({
       if (!isMounted) return;
 
       const wsUrl = getBackendWsUrl(`/api/instances/${encodeURIComponent(instanceId!)}/ws`);
-      if (!wsUrl) return;
+      if (!wsUrl) {
+        // No backend (mock mode): still show sample sparklines.
+        getMetricsHistory(instanceId!, METRICS_WINDOW)
+          .then((samples) => isMounted && setMetricsHistory(samples.map(toMetricPoint)))
+          .catch(() => {});
+        return;
+      }
 
       try {
         const ws = new WebSocket(wsUrl);
@@ -257,6 +283,18 @@ export function DashboardProvider({
           }
           setIsWsConnected(true);
           reconnectAttemptRef.current = 0;
+
+          // Backfill the sparklines from the worker's ring buffer; live points then come via WS.
+          getMetricsHistory(instanceId!, METRICS_WINDOW)
+            .then((samples) => {
+              if (!isMounted) return;
+              const fetched = samples.map(toMetricPoint);
+              const lastT = fetched.length > 0 ? fetched[fetched.length - 1].t : 0;
+              setMetricsHistory((prev) =>
+                [...fetched, ...prev.filter((p) => p.t > lastT)].slice(-METRICS_WINDOW)
+              );
+            })
+            .catch((err) => console.error("Failed to load metrics history:", err));
           setIsPhysicalServerOnline(true);
           consecutiveFailuresRef.current = 0;
 
@@ -287,6 +325,22 @@ export function DashboardProvider({
                   maxPlayers: data.max_players || 20,
                   isReachable: true,
                 }));
+                const sampledAt = data.sampled_at_ms;
+                if (typeof sampledAt === "number") {
+                  setMetricsHistory((prev) =>
+                    prev.length > 0 && prev[prev.length - 1].t >= sampledAt
+                      ? prev
+                      : [
+                          ...prev,
+                          toMetricPoint({
+                            t: sampledAt,
+                            cpu: data.cpu_usage,
+                            ram_mb: data.ram_used_mb,
+                            uptime_s: data.uptime_seconds,
+                          }),
+                        ].slice(-METRICS_WINDOW)
+                  );
+                }
                 setIsPhysicalServerOnline(true);
                 consecutiveFailuresRef.current = 0;
                 break;
@@ -350,6 +404,7 @@ export function DashboardProvider({
 
     return () => {
       isMounted = false;
+      setMetricsHistory([]);
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
@@ -575,6 +630,7 @@ export function DashboardProvider({
         canEditProperties,
         canManageMembers,
         status,
+        metricsHistory,
         isPhysicalServerOnline,
         isWsConnected,
         isConsoleActive,

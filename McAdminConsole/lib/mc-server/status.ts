@@ -1,4 +1,4 @@
-import { ServerStatus, ServerStatusState } from "./types";
+import { MetricSample, ServerStatus, ServerStatusState } from "./types";
 import { delay, getBackendBaseUrl, parseLogLine, apiFetch } from "./utils";
 import { logsCache } from "./console";
 
@@ -151,4 +151,28 @@ export async function toggleServerPower(
       throw new Error(`Failed to restart server: status ${res.status}`);
     }
   }
+}
+
+/** CPU/RAM samples (one per second, oldest first) for the last `seconds` (max 300). */
+export async function getMetricsHistory(instanceId: string, seconds = 60): Promise<MetricSample[]> {
+  const base = getBackendBaseUrl();
+  if (!base) {
+    const now = Date.now();
+    return Array.from({ length: seconds }, (_, i) => ({
+      t: now - (seconds - 1 - i) * 1000,
+      cpu: 20 + 10 * Math.sin(i / 6) + Math.random() * 5,
+      ram_mb: 3000 + 400 * Math.sin(i / 15),
+      uptime_s: 3600 + i,
+    }));
+  }
+
+  const res = await apiFetch(
+    `${base}/api/instances/${encodeURIComponent(instanceId)}/metrics/history?seconds=${seconds}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to fetch metrics history: ${res.status}`);
+  }
+  const data: { samples: MetricSample[] } = await res.json();
+  return data.samples;
 }

@@ -5,6 +5,7 @@ mod instance_manager;
 mod instance_runtime;
 mod java_download;
 mod java_manager;
+mod metrics_collector;
 mod minecraft_files;
 mod role_manager;
 mod user_manager;
@@ -14,7 +15,8 @@ use api::health;
 use api::instances::{
     add_instance_member, command_instance, create_instance, delete_instance, delete_instance_file,
     get_instance, get_instance_file_content, get_instance_members, get_instance_online_players,
-    get_instance_players, get_instance_properties, get_instance_status, get_my_instance_permissions,
+    get_instance_metrics_history, get_instance_players, get_instance_properties, get_instance_status,
+    get_my_instance_permissions,
     instance_player_action, instance_ws_handler, list_instance_files, list_instances,
     remove_instance_member, restart_instance, start_instance, stop_instance, transfer_instance_ownership,
     update_instance, update_instance_admins, update_instance_properties, upload_instance_file,
@@ -37,8 +39,6 @@ use role_manager::RoleManager;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
-use sysinfo::System;
-use tokio::sync::Mutex as TokioMutex;
 use tower_http::{
     cors::{AllowHeaders, AllowOrigin, CorsLayer},
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
@@ -48,7 +48,7 @@ use user_manager::UserManager;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub system: Arc<TokioMutex<System>>,
+    pub metrics: Arc<metrics_collector::MetricsStore>,
     pub config_manager: Arc<McConfigManager>,
     pub instance_manager: Arc<InstanceManager>,
     pub user_manager: Arc<UserManager>,
@@ -121,8 +121,11 @@ async fn main() {
         .await,
     );
 
+    let metrics = Arc::new(metrics_collector::MetricsStore::new());
+    metrics_collector::spawn(instance_manager.clone(), metrics.clone());
+
     let state = AppState {
-        system: Arc::new(TokioMutex::new(System::new_all())),
+        metrics,
         config_manager,
         instance_manager,
         user_manager: user_manager.clone(),
@@ -169,6 +172,7 @@ async fn main() {
             patch(update_instance).post(update_instance),
         )
         .route("/api/instances/{id}/status", get(get_instance_status))
+        .route("/api/instances/{id}/metrics/history", get(get_instance_metrics_history))
         .route("/api/instances/{id}/ws", get(instance_ws_handler))
         .route("/api/instances/{id}/start", post(start_instance))
         .route("/api/instances/{id}/stop", post(stop_instance))

@@ -40,6 +40,18 @@ export interface WsStatusMetrics {
   max_players: number;
   minecraft_version?: string | null;
   java_runtime?: string | null;
+  /** When the CPU/RAM sample was taken (unix ms); absent while offline. */
+  sampled_at_ms?: number | null;
+}
+
+/** One collector sample from the worker's per-instance ring buffer. */
+export interface MetricSample {
+  /** Unix timestamp in milliseconds. */
+  t: number;
+  /** Percent of total host CPU (0-100). */
+  cpu: number;
+  ram_mb: number;
+  uptime_s: number;
 }
 
 export type ServerWsMessage =

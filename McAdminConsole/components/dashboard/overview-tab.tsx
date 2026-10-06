@@ -22,7 +22,8 @@ import { Input } from "@/components/ui/input";
 import { ServerStatus, formatUptime, updateInstance } from "@/lib/mc-server";
 import { listJavaRuntimes, JavaRuntime } from "@/lib/mc-server/java";
 import { JavaRuntimeOptions } from "@/components/dashboard/java-runtime-options";
-import { useDashboard } from "./dashboard-context";
+import { useDashboard, METRICS_WINDOW } from "./dashboard-context";
+import { Sparkline } from "./sparkline";
 
 interface OverviewTabProps {
   status?: ServerStatus | null;
@@ -33,7 +34,7 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
   const context = useDashboard();
   const status = propStatus ?? context.status;
   const userRole = propUserRole ?? context.userRole;
-  const { instanceId, instanceDetail, refreshInstanceDetail, refreshAllInstances } = context;
+  const { instanceId, instanceDetail, refreshInstanceDetail, refreshAllInstances, metricsHistory } = context;
 
   const [ramGb, setRamGb] = useState<number>(instanceDetail?.ram_gb ?? 2);
   const [versionInput, setVersionInput] = useState<string>(instanceDetail?.minecraft_version ?? "");
@@ -115,6 +116,15 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
               max={100}
               className="h-2 bg-zinc-800 [&>div]:bg-emerald-500 [&>div]:shadow-[0_0_10px_#10b981]"
             />
+            <div>
+              <Sparkline
+                values={metricsHistory.map((p) => p.cpu)}
+                max={100}
+                slots={METRICS_WINDOW}
+                className="text-emerald-400"
+              />
+              <p className="text-[10px] text-zinc-500 font-mono mt-1">last 60s</p>
+            </div>
           </CardContent>
         </Card>
 
@@ -139,6 +149,15 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
               max={instanceDetail?.ram_gb ?? status?.ramMax ?? 8}
               className="h-2 bg-zinc-800 [&>div]:bg-purple-500 [&>div]:shadow-[0_0_10px_#a855f7]"
             />
+            <div>
+              <Sparkline
+                values={metricsHistory.map((p) => p.ramGb)}
+                max={instanceDetail?.ram_gb ?? status?.ramMax ?? 8}
+                slots={METRICS_WINDOW}
+                className="text-purple-400"
+              />
+              <p className="text-[10px] text-zinc-500 font-mono mt-1">last 60s</p>
+            </div>
           </CardContent>
         </Card>
 

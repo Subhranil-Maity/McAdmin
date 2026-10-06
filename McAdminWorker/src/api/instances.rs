@@ -14,17 +14,17 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate};
 use tokio::fs;
 use tokio::sync::broadcast;
 use tokio::sync::Mutex as TokioMutex;
-use tokio::time::{interval, Duration};
+use tokio::time::interval;
 use tracing::error;
 
 use crate::auth::AuthUser;
 use crate::instance_config::InstanceConfig;
 use crate::instance_manager::StartOutcome;
 use crate::instance_runtime::{IndexedLog, InstanceLogEvent, InstanceRuntime, MinecraftServerState};
+use crate::metrics_collector::{HISTORY_CAPACITY, MetricSample, SAMPLE_INTERVAL};
 use crate::minecraft_files::{self, BannedPlayerEntry, OpEntry, WhitelistEntry};
 use crate::role_manager::{Permission, ServerPermissions};
 use crate::AppState;
@@ -105,6 +105,8 @@ pub struct InstanceStatusMetrics {
     pub max_players: u32,
     pub minecraft_version: Option<String>,
     pub java_runtime: Option<String>,
+    /// When the reported CPU/RAM sample was taken (unix ms).
+    pub sampled_at_ms: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -494,28 +496,10 @@ pub async fn collect_instance_metrics(
 
     let ram_allocated_mb = (ram_gb as u64) * 1024;
 
-    let (cpu_usage, ram_used_mb, uptime_seconds) = if let Some(pid_u32) = process_id {
-        let pid = Pid::from_u32(pid_u32);
-        let mut system = state.system.lock().await;
-        system.refresh_cpu_usage();
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[pid]),
-            true,
-            ProcessRefreshKind::nothing().with_cpu().with_memory(),
-        );
-
-        if let Some(proc) = system.process(pid) {
-            let cpus_count = system.cpus().len().max(1) as f32;
-            let cpu = (proc.cpu_usage() / cpus_count).clamp(0.0, 100.0);
-            let mem = proc.memory() / 1024 / 1024;
-            let uptime = proc.run_time();
-            (cpu, mem, uptime)
-        } else {
-            (0.0, 0, 0)
-        }
-    } else {
-        (0.0, 0, 0)
-    };
+    let sample = process_id.and_then(|pid| state.metrics.latest(id, pid));
+    let (cpu_usage, ram_used_mb, uptime_seconds) = sample
+        .map(|m| (m.cpu, m.ram_mb, m.uptime_s))
+        .unwrap_or((0.0, 0, 0));
 
     InstanceStatusMetrics {
         id: id.to_string(),
@@ -531,7 +515,44 @@ pub async fn collect_instance_metrics(
         max_players,
         minecraft_version,
         java_runtime,
+        sampled_at_ms: sample.map(|m| m.t),
     }
+}
+
+#[derive(Deserialize)]
+pub struct MetricsHistoryQuery {
+    pub seconds: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct MetricsHistoryResponse {
+    pub interval_ms: u64,
+    pub capacity_s: usize,
+    pub samples: Vec<MetricSample>,
+}
+
+pub async fn get_instance_metrics_history(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<MetricsHistoryQuery>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<MetricsHistoryResponse>, StatusCode> {
+    if !user.has_instance_access(&id, &state.role_manager).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if state.instance_manager.get(&id).await.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let interval_ms = SAMPLE_INTERVAL.as_millis() as u64;
+    let seconds = query.seconds.unwrap_or(60).clamp(1, HISTORY_CAPACITY);
+    let count = (seconds as u64 * 1000 / interval_ms.max(1)) as usize;
+
+    Ok(Json(MetricsHistoryResponse {
+        interval_ms,
+        capacity_s: HISTORY_CAPACITY * interval_ms as usize / 1000,
+        samples: state.metrics.history(&id, count),
+    }))
 }
 
 pub async fn get_instance_status(
@@ -617,7 +638,8 @@ async fn handle_instance_socket(
     }
 
     let mut logs_subscribed = false;
-    let mut ticker = interval(Duration::from_millis(1500));
+    // Each tick only reads the latest collector sample, so match its rate.
+    let mut ticker = interval(SAMPLE_INTERVAL);
     ticker.tick().await;
 
     loop {
