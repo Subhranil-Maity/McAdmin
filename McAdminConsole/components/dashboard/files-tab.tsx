@@ -344,7 +344,7 @@ export default function FilesTab() {
     const filePath = `${parentPath}/${entry.name}`;
 
     try {
-      const fileData = await getServerFileContent(filePath);
+      const fileData = await getServerFileContent(filePath, instanceId);
       setEditingFile({
         path: fileData.path,
         filename: entry.name,
