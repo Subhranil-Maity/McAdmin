@@ -21,8 +21,10 @@ use tokio::time::interval;
 use tracing::error;
 
 use crate::auth::AuthUser;
-use crate::instance_config::InstanceConfig;
-use crate::instance_manager::StartOutcome;
+use crate::instance_config::{InstanceConfig, ServerType};
+use crate::instance_manager::{JarSource, StartOutcome};
+use crate::jobs::JobInfo;
+use crate::mc_versions::VersionStatus;
 use crate::instance_runtime::{IndexedLog, InstanceLogEvent, InstanceRuntime, MinecraftServerState};
 use crate::metrics_collector::{HISTORY_CAPACITY, MetricSample, SAMPLE_INTERVAL};
 use crate::minecraft_files::{self, BannedPlayerEntry, OpEntry, WhitelistEntry};
@@ -51,6 +53,9 @@ pub struct InstanceSummary {
     pub ram_gb: u32,
     pub minecraft_version: Option<String>,
     pub java_runtime: Option<String>,
+    pub server_type: ServerType,
+    pub loader_version: Option<String>,
+    pub version_status: VersionStatus,
     pub created_at: String,
     pub owner_id: Option<String>,
     pub admins: Vec<String>,
@@ -105,6 +110,9 @@ pub struct InstanceStatusMetrics {
     pub max_players: u32,
     pub minecraft_version: Option<String>,
     pub java_runtime: Option<String>,
+    pub server_type: ServerType,
+    pub loader_version: Option<String>,
+    pub version_status: VersionStatus,
     /// When the reported CPU/RAM sample was taken (unix ms).
     pub sampled_at_ms: Option<i64>,
 }
@@ -124,6 +132,9 @@ pub struct InstanceStatusResponse {
     pub max_players: u32,
     pub minecraft_version: Option<String>,
     pub java_runtime: Option<String>,
+    pub server_type: ServerType,
+    pub loader_version: Option<String>,
+    pub version_status: VersionStatus,
     pub recent_logs: Vec<String>,
 }
 
@@ -155,6 +166,8 @@ enum ServerWsMessage<'a> {
     CommandResult { status: &'static str, command: &'a str, response: &'a str },
     #[serde(rename = "pong")]
     Pong,
+    #[serde(rename = "job")]
+    Job(&'a JobInfo),
 }
 
 #[derive(Deserialize)]
@@ -164,6 +177,7 @@ pub struct UpdateInstanceRequest {
     pub minecraft_version: Option<String>,
     pub name: Option<String>,
     pub java_runtime: Option<String>,
+    pub loader_version: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -289,6 +303,11 @@ pub async fn list_instances(
             (0, 20)
         };
 
+        let version_status = state
+            .catalog
+            .status_cached(runtime.config.minecraft_version.as_deref())
+            .await;
+
         summaries.push(InstanceSummary {
             id: runtime.config.id.clone(),
             name: runtime.config.name.clone(),
@@ -298,6 +317,9 @@ pub async fn list_instances(
             ram_gb: runtime.config.ram_gb,
             minecraft_version: runtime.config.minecraft_version.clone(),
             java_runtime: runtime.config.java_runtime.clone(),
+            server_type: runtime.config.server_type,
+            loader_version: runtime.config.loader_version.clone(),
+            version_status,
             created_at: runtime.config.created_at.clone(),
             owner_id: perms.owner_id.or_else(|| runtime.config.owner_id.clone()),
             admins: if !perms.admins.is_empty() { perms.admins } else { runtime.config.admins.clone() },
@@ -318,9 +340,9 @@ pub async fn create_instance(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
     mut multipart: Multipart,
-) -> Result<(StatusCode, Json<InstanceConfig>), StatusCode> {
+) -> Result<(StatusCode, Json<InstanceConfig>), super::ApiError> {
     if !user.can_create_server() {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(super::api_error(StatusCode::FORBIDDEN, "forbidden", "Server creation is not allowed for your account"));
     }
 
     let mut name = None;
@@ -331,15 +353,17 @@ pub async fn create_instance(
     let mut rcon_port = None;
     let mut jar_data = None;
     let mut jar_filename = None;
+    let mut server_type = ServerType::Custom;
+    let mut loader_version = None;
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         error!("failed to read multipart field: {e}");
-        StatusCode::BAD_REQUEST
+        bad_request("Invalid form data")
     })? {
         let field_name = field.name().unwrap_or("").to_string();
         match field_name.as_str() {
             "name" => {
-                name = Some(field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?);
+                name = Some(field.text().await.map_err(|_| bad_request("Invalid name"))?);
             }
             "minecraft_version" | "version" => {
                 if let Ok(text) = field.text().await {
@@ -378,17 +402,72 @@ pub async fn create_instance(
                     }
                 }
             }
+            "server_type" => {
+                let text = field.text().await.map_err(|_| bad_request("Invalid server_type"))?;
+                server_type = ServerType::parse(&text)
+                    .ok_or_else(|| bad_request("server_type must be vanilla, fabric or custom"))?;
+            }
+            "loader_version" => {
+                if let Ok(text) = field.text().await {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        loader_version = Some(trimmed.to_string());
+                    }
+                }
+            }
             "file" => {
                 jar_filename = field.file_name().map(|s| s.to_string());
-                let bytes = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                let bytes = field.bytes().await.map_err(|_| bad_request("Failed to read uploaded jar"))?;
                 jar_data = Some(bytes.to_vec());
             }
             _ => {}
         }
     }
 
-    let name = name.ok_or(StatusCode::BAD_REQUEST)?;
-    let jar_data = jar_data.ok_or(StatusCode::BAD_REQUEST)?;
+    let name = name
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| bad_request("Server name is required"))?;
+
+    let jar = match server_type {
+        ServerType::Custom => JarSource::Uploaded {
+            data: jar_data.ok_or_else(|| bad_request("A server .jar file is required for custom servers"))?,
+            filename: jar_filename,
+        },
+        managed => {
+            let version = minecraft_version
+                .as_deref()
+                .ok_or_else(|| bad_request("A Minecraft version is required"))?;
+            if state.catalog.find(version).await.is_none() {
+                let snap = state.catalog.cached_snapshot().await;
+                if snap.manifest.is_none() {
+                    return Err(super::api_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "version_list_unavailable",
+                        "The official Minecraft version list could not be loaded. Check the worker's internet connection and retry.",
+                    ));
+                }
+                return Err(bad_request(format!(
+                    "\"{version}\" is not an official Minecraft version; use a Custom JAR server for unofficial versions"
+                )));
+            }
+            if managed == ServerType::Fabric {
+                let loader = state
+                    .catalog
+                    .resolve_fabric_loader(version, loader_version.as_deref())
+                    .await
+                    .map_err(|e| {
+                        if e.to_string().contains("request failed") {
+                            super::api_error(StatusCode::BAD_GATEWAY, "fabric_unreachable", e.to_string())
+                        } else {
+                            bad_request(e.to_string())
+                        }
+                    })?;
+                loader_version = Some(loader);
+            }
+            JarSource::Managed(managed)
+        }
+    };
 
     let config = state
         .instance_manager
@@ -399,14 +478,14 @@ pub async fn create_instance(
             java_runtime,
             server_port,
             rcon_port,
-            &jar_data,
-            jar_filename,
+            jar,
+            loader_version,
             Some(user.user_id.clone()),
         )
         .await
         .map_err(|e| {
             error!("Failed to create instance: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
+            super::api_error(StatusCode::INTERNAL_SERVER_ERROR, "create_failed", e.to_string())
         })?;
 
     let _ = state
@@ -468,7 +547,7 @@ pub async fn collect_instance_metrics(
     runtime_arc: &Arc<TokioMutex<InstanceRuntime>>,
     state: &AppState,
 ) -> InstanceStatusMetrics {
-    let (status_str, process_id, server_port, rcon_port, ram_gb, name, minecraft_version, java_runtime) = {
+    let (status_str, process_id, server_port, rcon_port, ram_gb, name, minecraft_version, java_runtime, server_type, loader_version) = {
         let runtime = runtime_arc.lock().await;
         (
             runtime.state.as_str().to_string(),
@@ -479,8 +558,11 @@ pub async fn collect_instance_metrics(
             runtime.config.name.clone(),
             runtime.config.minecraft_version.clone(),
             runtime.config.java_runtime.clone(),
+            runtime.config.server_type,
+            runtime.config.loader_version.clone(),
         )
     };
+    let version_status = state.catalog.status_cached(minecraft_version.as_deref()).await;
 
     let is_online = status_str == "ONLINE";
 
@@ -515,6 +597,9 @@ pub async fn collect_instance_metrics(
         max_players,
         minecraft_version,
         java_runtime,
+        server_type,
+        loader_version,
+        version_status,
         sampled_at_ms: sample.map(|m| m.t),
     }
 }
@@ -592,6 +677,9 @@ pub async fn get_instance_status(
         max_players: metrics.max_players,
         minecraft_version: metrics.minecraft_version,
         java_runtime: metrics.java_runtime,
+        server_type: metrics.server_type,
+        loader_version: metrics.loader_version,
+        version_status: metrics.version_status,
         recent_logs,
     }))
 }
@@ -628,6 +716,7 @@ async fn handle_instance_socket(
         let runtime = runtime_arc.lock().await;
         runtime.logs.subscribe()
     };
+    let mut job_rx = state.jobs.subscribe();
 
     // Send initial status snapshot immediately
     let initial_metrics = collect_instance_metrics(&id, &runtime_arc, &state).await;
@@ -764,6 +853,20 @@ async fn handle_instance_socket(
                 }
             }
 
+            job_event = job_rx.recv() => {
+                match job_event {
+                    Ok(job) if job.instance_id == id => {
+                        if let Ok(json) = serde_json::to_string(&ServerWsMessage::Job(&job)) {
+                            if ws_sender.send(Message::Text(json.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+
             _ = ticker.tick() => {
                 let metrics = collect_instance_metrics(&id, &runtime_arc, &state).await;
                 if let Ok(json) = serde_json::to_string(&ServerWsMessage::Status(&metrics)) {
@@ -791,12 +894,16 @@ pub async fn start_instance(
 
     let outcome = state.instance_manager.start_instance(&id).await.map_err(|e| {
         error!("Failed to start instance: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     })?;
 
     Ok(match outcome {
         StartOutcome::Started => StatusCode::OK,
-        StartOutcome::PreparingJava => StatusCode::ACCEPTED,
+        StartOutcome::Preparing => StatusCode::ACCEPTED,
     })
 }
 
@@ -1104,6 +1211,7 @@ pub async fn update_instance(
             trimmed_version,
             payload.name,
             payload.java_runtime,
+            payload.loader_version,
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -1115,6 +1223,7 @@ pub async fn update_instance(
         runtime.config.minecraft_version = updated.minecraft_version.clone();
         runtime.config.name = updated.name.clone();
         runtime.config.java_runtime = updated.java_runtime.clone();
+        runtime.config.loader_version = updated.loader_version.clone();
     }
 
     Ok(Json(updated))
@@ -1829,4 +1938,8 @@ async fn write_file_inner(base: &FsPath, destination: &FsPath, data: &[u8]) -> R
     }
 
     Ok(())
+}
+
+fn bad_request(message: impl Into<String>) -> super::ApiError {
+    super::api_error(StatusCode::BAD_REQUEST, "bad_request", message)
 }

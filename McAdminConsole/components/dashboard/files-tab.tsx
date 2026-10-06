@@ -23,7 +23,9 @@ import {
   Edit as EditIcon,
   FolderOpen,
   Lock,
+  Package,
 } from "lucide-react";
+import Link from "next/link";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -709,6 +711,15 @@ export default function FilesTab() {
 
         {/* Toolbar Buttons taking only needed space */}
         <div className="flex items-center gap-2 flex-shrink-0">
+          {instanceId && (currentPath === "/mods" || /\/datapacks$/.test(currentPath)) && (
+            <Link
+              href={`/dashboard/${instanceId}/content`}
+              className="h-9 px-3 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white flex items-center gap-1.5 transition-colors"
+            >
+              <Package className="w-3.5 h-3.5" />
+              {currentPath === "/mods" ? "Manage mods" : "Manage datapacks"}
+            </Link>
+          )}
           {currentPath !== "/" && (
             <Button
               onClick={navigateUp}

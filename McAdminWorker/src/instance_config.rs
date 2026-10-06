@@ -9,6 +9,34 @@ pub const DEFAULT_RCON_PORT: u16 = 25575;
 pub const DEFAULT_RAM_GB: u32 = 2;
 pub const DEFAULT_JAR_NAME: &str = "server.jar";
 
+/// How the server jar is provided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ServerType {
+    /// Official Mojang server jar, downloaded by the worker.
+    Vanilla,
+    /// Fabric server launcher, downloaded by the worker.
+    Fabric,
+    /// User-uploaded jar (the default, so pre-existing instances keep working).
+    #[default]
+    Custom,
+}
+
+impl ServerType {
+    pub fn is_managed(self) -> bool {
+        !matches!(self, ServerType::Custom)
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "vanilla" | "official" => Some(Self::Vanilla),
+            "fabric" => Some(Self::Fabric),
+            "custom" | "" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstanceConfig {
     pub id: String,
@@ -28,6 +56,14 @@ pub struct InstanceConfig {
     pub minecraft_version: Option<String>,
     #[serde(default)]
     pub java_runtime: Option<String>,
+    #[serde(default)]
+    pub server_type: ServerType,
+    /// Fabric loader version (Fabric instances only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loader_version: Option<String>,
+    /// `<minecraft_version>|<loader_version>` the current managed jar was downloaded for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_jar_version: Option<String>,
     pub created_at: String,
     #[serde(default)]
     pub owner_id: Option<String>,
@@ -137,6 +173,23 @@ impl McConfigManager {
         }
     }
 
+    /// Applies `f` to an instance and persists the config.
+    pub async fn update_with(
+        &self,
+        id: &str,
+        f: impl FnOnce(&mut InstanceConfig),
+    ) -> io::Result<Option<InstanceConfig>> {
+        let mut lock = self.config.lock().await;
+        if let Some(instance) = lock.instances.iter_mut().find(|i| i.id == id) {
+            f(instance);
+            let updated = instance.clone();
+            Self::save_locked(&self.path, &lock).await?;
+            Ok(Some(updated))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn update_instance_admins(
         &self,
         id: &str,
@@ -160,6 +213,7 @@ impl McConfigManager {
         minecraft_version: Option<String>,
         name: Option<String>,
         java_runtime: Option<String>,
+        loader_version: Option<String>,
     ) -> io::Result<Option<InstanceConfig>> {
         let mut lock = self.config.lock().await;
         if let Some(instance) = lock.instances.iter_mut().find(|i| i.id == id) {
@@ -183,6 +237,14 @@ impl McConfigManager {
             if let Some(jr) = java_runtime {
                 let trimmed = jr.trim();
                 instance.java_runtime = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                };
+            }
+            if let Some(lv) = loader_version {
+                let trimmed = lv.trim();
+                instance.loader_version = if trimmed.is_empty() {
                     None
                 } else {
                     Some(trimmed.to_string())
@@ -244,4 +306,45 @@ async fn write_config_file(path: &Path, config: &McConfig) -> io::Result<()> {
         )
     })?;
     tokio::fs::write(path, content).await
+}
+
+impl InstanceConfig {
+    /// Identifier of the managed jar this config wants (`<mc>|<loader>`).
+    pub fn wanted_jar_version(&self) -> Option<String> {
+        let mc = self.minecraft_version.as_deref()?.trim();
+        if mc.is_empty() {
+            return None;
+        }
+        Some(match self.server_type {
+            ServerType::Fabric => format!("{mc}|{}", self.loader_version.as_deref().unwrap_or("")),
+            _ => format!("{mc}|"),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_configs_default_to_custom() {
+        let json = r#"{"version":1,"instances":[{"id":"a","name":"Old","folder":"instances/a",
+            "jar_name":"paper.jar","server_port":25565,"rcon_port":25575,"rcon_password":"x",
+            "ram_gb":4,"minecraft_version":"whatever-1.0","created_at":"2026-01-01T00:00:00Z"}]}"#;
+        let cfg: McConfig = serde_json::from_str(json).unwrap();
+        let inst = &cfg.instances[0];
+        assert_eq!(inst.server_type, ServerType::Custom);
+        assert_eq!(inst.jar_name, "paper.jar");
+        assert!(inst.loader_version.is_none());
+        assert!(inst.installed_jar_version.is_none());
+    }
+
+    #[test]
+    fn parses_server_types() {
+        assert_eq!(ServerType::parse("Vanilla"), Some(ServerType::Vanilla));
+        assert_eq!(ServerType::parse("official"), Some(ServerType::Vanilla));
+        assert_eq!(ServerType::parse("fabric"), Some(ServerType::Fabric));
+        assert_eq!(ServerType::parse(""), Some(ServerType::Custom));
+        assert_eq!(ServerType::parse("forge"), None);
+    }
 }

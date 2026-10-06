@@ -1,14 +1,18 @@
 import { getBackendBaseUrl, apiFetch, getAuthToken } from "./utils";
+import type { ServerType, VersionStatus } from "./minecraft";
 
 export interface InstanceSummary {
   id: string;
   name: string;
-  status: "ONLINE" | "OFFLINE" | "STARTING" | "STOPPING";
+  status: "ONLINE" | "OFFLINE" | "STARTING" | "STOPPING" | "INSTALLING";
   server_port: number;
   rcon_port: number;
   ram_gb: number;
   minecraft_version?: string;
   java_runtime?: string;
+  server_type?: ServerType;
+  loader_version?: string | null;
+  version_status?: VersionStatus;
   created_at: string;
   owner_id?: string;
   admins: string[];
@@ -30,6 +34,9 @@ export interface InstanceDetail {
   ram_gb: number;
   minecraft_version?: string;
   java_runtime?: string;
+  server_type?: ServerType;
+  loader_version?: string | null;
+  installed_jar_version?: string | null;
   created_at: string;
   owner_id?: string;
   admins: string[];
@@ -141,7 +148,12 @@ export async function createInstance(
           reject(new Error("Invalid JSON response from server"));
         }
       } else {
-        reject(new Error(`Failed to create instance: status ${xhr.status} ${xhr.responseText}`));
+        let message = `Failed to create instance (status ${xhr.status})`;
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (data?.message) message = data.message;
+        } catch {}
+        reject(new Error(message));
       }
     };
 
@@ -197,6 +209,7 @@ export interface UpdateInstancePayload {
   minecraft_version?: string;
   name?: string;
   java_runtime?: string;
+  loader_version?: string;
 }
 
 export async function updateInstance(

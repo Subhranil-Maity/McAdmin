@@ -1,14 +1,11 @@
 //! Downloads and installs official Eclipse Temurin JREs (via the Adoptium API)
 //! into `$HOME_DIR/java/temurin-<major>/`.
 
-use futures_util::StreamExt;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 /// Java major versions offered as managed (auto-downloaded) runtimes.
@@ -131,9 +128,7 @@ fn adoptium_arch() -> io::Result<&'static str> {
     }
 }
 
-fn other_err(msg: impl Into<String>) -> io::Error {
-    io::Error::other(msg.into())
-}
+use crate::http_download::other_err;
 
 /// Ensures Temurin JRE `major` is installed, downloading it if needed.
 /// Progress lines are reported through `log`. Returns the `java` executable path.
@@ -155,10 +150,7 @@ pub async fn ensure_installed(
 
     log(format!("[Java] Eclipse Temurin JRE {major} is not installed; fetching release info from Adoptium..."));
 
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("McAdminWorker/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| other_err(e.to_string()))?;
+    let client = crate::http_download::client();
 
     let url = format!(
         "https://api.adoptium.net/v3/assets/latest/{major}/hotspot?os=linux&architecture={}&image_type=jre&vendor=eclipse",
@@ -184,55 +176,17 @@ pub async fn ensure_installed(
     let staging_dir = root.join(format!(".tmp-{MANAGED_PREFIX}{major}"));
 
     // Download with progress + checksum
-    let resp = client
-        .get(&pkg.link)
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| other_err(format!("Download failed: {e}")))?;
-    let total = pkg.size.or(resp.content_length());
-    let mb = |b: u64| b as f64 / 1_048_576.0;
-
-    log(match total {
-        Some(t) => format!("[Java] Downloading Temurin JRE {major} ({release}), {:.1} MB...", mb(t)),
-        None => format!("[Java] Downloading Temurin JRE {major} ({release})..."),
-    });
-
-    let mut file = tokio::fs::File::create(&archive_path).await?;
-    let mut hasher = Sha256::new();
-    let mut downloaded: u64 = 0;
-    let mut last_step: u64 = 0;
-    let mut stream = resp.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| other_err(format!("Download interrupted: {e}")))?;
-        hasher.update(&chunk);
-        file.write_all(&chunk).await?;
-        downloaded += chunk.len() as u64;
-
-        if let Some(t) = total.filter(|t| *t > 0) {
-            let pct = downloaded * 100 / t;
-            if pct / 5 > last_step {
-                last_step = pct / 5;
-                log(format!(
-                    "[Java] Downloading Temurin JRE {major}: {pct}% ({:.1}/{:.1} MB)",
-                    mb(downloaded),
-                    mb(t)
-                ));
-            }
-        }
-    }
-    file.flush().await?;
-    drop(file);
-
-    let digest: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    if let Some(expected) = pkg.checksum.as_deref() {
-        if !expected.eq_ignore_ascii_case(&digest) {
-            let _ = tokio::fs::remove_file(&archive_path).await;
-            return Err(other_err(format!(
-                "Checksum mismatch for Temurin JRE {major} (expected {expected}, got {digest})"
-            )));
-        }
+    let has_checksum = pkg.checksum.is_some();
+    crate::http_download::download_to_file(
+        &pkg.link,
+        &archive_path,
+        pkg.checksum.map(crate::http_download::Hash::Sha256),
+        pkg.size,
+        &format!("Temurin JRE {major} ({release})"),
+        &|line| log(format!("[Java] {line}")),
+    )
+    .await?;
+    if has_checksum {
         log("[Java] Checksum verified (sha256).".to_string());
     }
 

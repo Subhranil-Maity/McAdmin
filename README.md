@@ -27,6 +27,12 @@ Unlike traditional control panels that demand heavy external services (MySQL, Re
   - **1-Click "Make Admin" Promotion**: Instantly grant all 18 permissions in a single atomic update.
   - **Role Presets**: `Administrator` (18/18), `Moderator` (11/18), `Viewer` (5/18), or arbitrary `Custom` overrides.
   - **Hardened API Guards**: Axum handlers verify permissions with `user.require_permissions()`, returning structured HTTP 403 Forbidden with missing capability identifiers.
+- **Official Server Downloads**: Create Official (Mojang) or Fabric servers by picking a version. The worker downloads and verifies the jar itself, and re-downloads it when you change the version. Custom JAR uploads still work, and any version string is accepted (unofficial ones show as "unknown"). The version list is cached on disk, so a stale or offline list never breaks existing servers.
+- **Modrinth Integration (Mods & Packs tab)**:
+  - Browse and install Fabric mods (with required dependencies), datapacks and server resource packs. All downloads happen on the worker, not in the browser.
+  - Install Fabric modpacks (`.mrpack`) onto an existing server or create a new server from a modpack.
+  - **Identify mods**: match jars you already have to Modrinth by file hash and check for updates. Metadata and icons are cached locally, so the installed list works while Modrinth is offline.
+  - Respects Modrinth's rate limit with live progress bars, and shows a Retry button when Modrinth can't be reached.
 - **Dynamic Java Runtime Switching**: Automatically scans host system installations (`/usr/lib/jvm`, `/opt/java`, `PATH`) and allows binding different OpenJDK versions (Java 8, 11, 17, 21+) per instance with zero `JAVA_HOME` conflicts.
 - **Web-Based File Manager**:
   - Full directory tree navigation with path-traversal security guards.
@@ -149,7 +155,7 @@ mcadmin/
 1. **Rust**: 1.85+ (or 2024 edition compatible toolchain).
 2. **Bun** (recommended) or **Node.js**: v18+.
 3. **Java**: At least one Java Runtime Environment (JRE/JDK 8, 17, or 21) installed on the host machine.
-4. **Minecraft Server JAR**: Vanilla, Paper, Purpur, Forge, or Fabric `.jar` file.
+4. **Minecraft Server JAR** (optional): Official and Fabric servers are downloaded automatically. You only need your own `.jar` for Paper, Purpur, Forge, etc.
 
 ---
 

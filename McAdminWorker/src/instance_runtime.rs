@@ -149,6 +149,8 @@ pub enum MinecraftServerState {
     Online,
     /// `stop` was sent; waiting for the process to exit.
     Stopping,
+    /// A modpack is being installed; the server can't be started.
+    Installing,
 }
 
 impl MinecraftServerState {
@@ -158,6 +160,7 @@ impl MinecraftServerState {
             Self::Starting => "STARTING",
             Self::Online => "ONLINE",
             Self::Stopping => "STOPPING",
+            Self::Installing => "INSTALLING",
         }
     }
 }

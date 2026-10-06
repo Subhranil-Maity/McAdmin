@@ -24,6 +24,7 @@ import { listJavaRuntimes, JavaRuntime } from "@/lib/mc-server/java";
 import { JavaRuntimeOptions } from "@/components/dashboard/java-runtime-options";
 import { useDashboard, METRICS_WINDOW } from "./dashboard-context";
 import { Sparkline } from "./sparkline";
+import { VersionPicker } from "./version-picker";
 
 interface OverviewTabProps {
   status?: ServerStatus | null;
@@ -34,12 +35,16 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
   const context = useDashboard();
   const status = propStatus ?? context.status;
   const userRole = propUserRole ?? context.userRole;
-  const { instanceId, instanceDetail, refreshInstanceDetail, refreshAllInstances, metricsHistory } = context;
+  const { instanceId, instanceDetail, refreshInstanceDetail, refreshAllInstances, metricsHistory, allInstances } = context;
+  const serverType = instanceDetail?.server_type ?? "custom";
+  const isManaged = serverType === "vanilla" || serverType === "fabric";
+  const versionStatus = allInstances.find((i) => i.id === instanceId)?.version_status;
 
   const [ramGb, setRamGb] = useState<number>(instanceDetail?.ram_gb ?? 2);
   const [versionInput, setVersionInput] = useState<string>(instanceDetail?.minecraft_version ?? "");
   const [javaRuntimes, setJavaRuntimes] = useState<JavaRuntime[]>([]);
   const [selectedJava, setSelectedJava] = useState<string>(instanceDetail?.java_runtime ?? "");
+  const [loaderInput, setLoaderInput] = useState<string>(instanceDetail?.loader_version ?? "");
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -59,16 +64,17 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
       if (instanceDetail.java_runtime !== undefined) {
         setSelectedJava(instanceDetail.java_runtime || "");
       }
+      setLoaderInput(instanceDetail.loader_version || "");
     }
   }, [instanceDetail]);
 
   const currentRam = instanceDetail?.ram_gb ?? 2;
   const currentVersion = instanceDetail?.minecraft_version || "";
   const currentJava = instanceDetail?.java_runtime || "";
-  const isDirty =
-    ramGb !== currentRam ||
-    versionInput.trim() !== currentVersion ||
-    selectedJava !== currentJava;
+  const currentLoader = instanceDetail?.loader_version || "";
+  const versionChanged = versionInput.trim() !== currentVersion;
+  const loaderChanged = serverType === "fabric" && loaderInput !== currentLoader;
+  const isDirty = ramGb !== currentRam || versionChanged || selectedJava !== currentJava || loaderChanged;
 
   const handleSaveConfig = async () => {
     if (!instanceId) return;
@@ -81,10 +87,15 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
         ram_gb: ramGb,
         minecraft_version: trimmedVersion,
         java_runtime: selectedJava,
+        ...(serverType === "fabric" ? { loader_version: loaderInput } : {}),
       });
       await refreshInstanceDetail();
       await refreshAllInstances();
-      setSaveSuccess("Configuration saved! If the server is running, restart it to apply RAM and Java runtime changes.");
+      setSaveSuccess(
+        isManaged && (versionChanged || loaderChanged)
+          ? "Configuration saved! The matching server jar will be downloaded the next time the server starts."
+          : "Configuration saved! If the server is running, restart it to apply RAM and Java runtime changes."
+      );
       setTimeout(() => setSaveSuccess(null), 5000);
     } catch (err) {
       console.error("Failed to update instance config:", err);
@@ -270,19 +281,53 @@ export default function OverviewTab({ status: propStatus, userRole: propUserRole
                   <label className="text-xs font-bold text-zinc-300 flex items-center gap-1.5 uppercase font-mono tracking-wider">
                     <Layers className="w-4 h-4 text-emerald-400" /> Minecraft Version
                   </label>
-                  <span className="text-[10px] text-zinc-500 font-mono">e.g. 1.20.4, 1.21</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-bold uppercase text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.5 rounded">
+                      {serverType === "vanilla" ? "Official" : serverType === "fabric" ? "Fabric" : "Custom JAR"}
+                    </span>
+                    {versionStatus === "unknown" && currentVersion && (
+                      <span
+                        title="Not in the official Minecraft release list (or the list couldn't be loaded)"
+                        className="text-[10px] font-bold uppercase text-amber-300 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded"
+                      >
+                        Unknown
+                      </span>
+                    )}
+                  </span>
                 </div>
-                <Input
-                  type="text"
-                  placeholder="1.20.4"
-                  value={versionInput}
-                  onChange={(e) => setVersionInput(e.target.value)}
-                  disabled={isSaving}
-                  className="bg-zinc-950 border-zinc-800 text-xs font-mono rounded-xl h-10 text-zinc-200 focus-visible:ring-indigo-500 placeholder:text-zinc-600"
-                />
-                <p className="text-[11px] text-zinc-500 leading-relaxed">
-                  Enter your server version string. Leading and trailing whitespaces are automatically trimmed before saving to configuration.
-                </p>
+                {isManaged ? (
+                  <>
+                    <VersionPicker
+                      serverType={serverType}
+                      version={versionInput}
+                      onVersionChange={setVersionInput}
+                      loader={loaderInput}
+                      onLoaderChange={setLoaderInput}
+                      disabled={isSaving}
+                      autoSelect={false}
+                    />
+                    <p className="text-[11px] text-zinc-500 leading-relaxed">
+                      Changing the version downloads the matching official
+                      {serverType === "fabric" ? " Minecraft and Fabric" : ""} server jar on the next start. Mods may need
+                      updating for a new version.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <Input
+                      type="text"
+                      placeholder="1.20.4"
+                      value={versionInput}
+                      onChange={(e) => setVersionInput(e.target.value)}
+                      disabled={isSaving}
+                      className="bg-zinc-950 border-zinc-800 text-xs font-mono rounded-xl h-10 text-zinc-200 focus-visible:ring-indigo-500 placeholder:text-zinc-600"
+                    />
+                    <p className="text-[11px] text-zinc-500 leading-relaxed">
+                      Custom JAR servers use the uploaded jar as-is; the version is a label used to pick Java. Any value is
+                      allowed. Versions that aren&apos;t official releases are shown as &quot;unknown&quot;.
+                    </p>
+                  </>
+                )}
               </div>
 
               {/* Java Runtime */}

@@ -9,3 +9,5 @@ export * from "./plugins";
 export * from "./properties";
 export * from "./files";
 export * from "./java";
+export * from "./minecraft";
+export * from "./modrinth";

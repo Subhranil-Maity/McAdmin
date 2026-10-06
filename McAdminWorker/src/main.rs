@@ -1,12 +1,18 @@
 mod api;
 mod auth;
+mod content;
+mod http_download;
 mod instance_config;
 mod instance_manager;
 mod instance_runtime;
 mod java_download;
 mod java_manager;
+mod jobs;
+mod mc_versions;
 mod metrics_collector;
 mod minecraft_files;
+mod modpack;
+mod modrinth;
 mod role_manager;
 mod user_manager;
 
@@ -25,6 +31,13 @@ use api::instances::{
 use api::java_runtimes::{
     add_or_update_java_runtime, delete_java_runtime, list_java_runtimes, scan_java_runtimes,
 };
+use api::content::{
+    create_modpack_instance, delete_instance_content, get_instance_content_icon, get_job,
+    identify_instance_content, install_instance_content, install_instance_modpack,
+    list_instance_content, list_instance_jobs,
+};
+use api::minecraft::{fabric_games, fabric_loaders, list_minecraft_versions};
+use api::modrinth::{modrinth_project, modrinth_project_versions, modrinth_search};
 use api::users::{delete_user, list_users, update_user};
 use auth::JwtAuthLayer;
 use axum::{
@@ -54,6 +67,9 @@ pub struct AppState {
     pub user_manager: Arc<UserManager>,
     pub role_manager: Arc<RoleManager>,
     pub java_manager: Arc<JavaManager>,
+    pub catalog: Arc<mc_versions::VersionCatalog>,
+    pub modrinth: Arc<modrinth::ModrinthClient>,
+    pub jobs: Arc<jobs::JobRegistry>,
     pub jwt_secret: Arc<String>,
     pub home_dir: Arc<PathBuf>,
 }
@@ -111,12 +127,24 @@ async fn main() {
             .expect("Failed to load JavaManager"),
     );
 
+    let catalog = Arc::new(mc_versions::VersionCatalog::new(&home_dir).await);
+    {
+        // Warm the version list in the background; failures fall back to the cache.
+        let catalog = catalog.clone();
+        tokio::spawn(async move {
+            catalog.snapshot(false).await;
+        });
+    }
+    let modrinth = Arc::new(modrinth::ModrinthClient::new(env::var("MODRINTH_API_URL").ok()));
+    let jobs = jobs::JobRegistry::new();
+
     let instance_manager = Arc::new(
         InstanceManager::new(
             (*home_dir).clone(),
             rcon_host,
             config_manager.clone(),
             java_manager.clone(),
+            catalog.clone(),
         )
         .await,
     );
@@ -133,6 +161,9 @@ async fn main() {
         user_manager: user_manager.clone(),
         role_manager,
         java_manager,
+        catalog,
+        modrinth,
+        jobs,
         jwt_secret: Arc::new(jwt_secret.clone()),
         home_dir,
     };
@@ -156,8 +187,19 @@ async fn main() {
         )
         .route("/api/java-runtimes/scan", post(scan_java_runtimes))
         .route("/api/java-runtimes/{id}", delete(delete_java_runtime))
+        // Minecraft versions & Fabric meta
+        .route("/api/minecraft/versions", get(list_minecraft_versions))
+        .route("/api/minecraft/fabric/games", get(fabric_games))
+        .route("/api/minecraft/fabric/loaders", get(fabric_loaders))
+        // Modrinth proxy
+        .route("/api/modrinth/search", get(modrinth_search))
+        .route("/api/modrinth/project/{id}", get(modrinth_project))
+        .route("/api/modrinth/project/{id}/versions", get(modrinth_project_versions))
+        // Background jobs
+        .route("/api/jobs/{id}", get(get_job))
         // Instances
         .route("/api/instances", get(list_instances))
+        .route("/api/instances/modpack", post(create_modpack_instance))
         .route(
             "/api/instances",
             post(create_instance).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024)),
@@ -200,6 +242,19 @@ async fn main() {
             "/api/instances/{id}/players/{action}",
             post(instance_player_action),
         )
+        // Instance content (mods, datapacks, resource pack, modpacks)
+        .route("/api/instances/{id}/jobs", get(list_instance_jobs))
+        .route(
+            "/api/instances/{id}/content",
+            get(list_instance_content).delete(delete_instance_content),
+        )
+        .route("/api/instances/{id}/content/install", post(install_instance_content))
+        .route("/api/instances/{id}/content/identify", post(identify_instance_content))
+        .route(
+            "/api/instances/{id}/content/icon/{project_id}",
+            get(get_instance_content_icon),
+        )
+        .route("/api/instances/{id}/modpack", post(install_instance_modpack))
         // Instance files
         .route("/api/instances/{id}/files", get(list_instance_files).delete(delete_instance_file))
         .route(

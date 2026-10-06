@@ -184,7 +184,7 @@ export default function ServerGrid({
         const isOnline = instance.status === "ONLINE";
         const isStopping = instance.status === "STOPPING";
         // Starting or stopping: shown in amber with power actions disabled.
-        const isStarting = instance.status === "STARTING" || isStopping;
+        const isStarting = instance.status === "STARTING" || isStopping || instance.status === "INSTALLING";
         const isOffline = instance.status === "OFFLINE";
 
         const canManage = canManageInstance(instance);
@@ -222,8 +222,25 @@ export default function ServerGrid({
                     <div className="flex items-center gap-2 text-[11px] text-zinc-500 font-mono mt-0.5">
                       <span>Port {instance.server_port}</span>
                       {instance.minecraft_version && (
-                        <span className="text-zinc-300 px-1.5 py-0.2 rounded bg-zinc-800/80 border border-zinc-700 font-mono text-[10px]">
+                        <span
+                          title={
+                            instance.version_status === "unknown"
+                              ? "Not an official Minecraft release (or the version list hasn't loaded yet)"
+                              : undefined
+                          }
+                          className={`px-1.5 py-0.2 rounded border font-mono text-[10px] ${
+                            instance.version_status === "unknown"
+                              ? "text-amber-300 bg-amber-500/10 border-amber-500/20"
+                              : "text-zinc-300 bg-zinc-800/80 border-zinc-700"
+                          }`}
+                        >
                           v{instance.minecraft_version}
+                          {instance.version_status === "unknown" ? " ?" : ""}
+                        </span>
+                      )}
+                      {instance.server_type && instance.server_type !== "custom" && (
+                        <span className="text-indigo-300 px-1.5 py-0.2 rounded bg-indigo-500/10 border border-indigo-500/20 font-sans text-[9px] font-bold uppercase">
+                          {instance.server_type}
                         </span>
                       )}
                       {instance.java_runtime && (

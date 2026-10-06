@@ -2,15 +2,45 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { createInstance, InstanceSummary } from "@/lib/mc-server";
+import {
+  createInstance,
+  createModpackInstance,
+  InstanceSummary,
+  ModrinthSearchHit,
+  ModrinthVersion,
+} from "@/lib/mc-server";
 import { listJavaRuntimes, JavaRuntime } from "@/lib/mc-server/java";
 import { JavaRuntimeOptions } from "@/components/dashboard/java-runtime-options";
+import { VersionPicker } from "@/components/dashboard/version-picker";
+import { ModrinthBrowser } from "@/components/dashboard/modrinth-browser";
 import { useAuth } from "@/lib/auth/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { Upload, X, Loader2, Server, HardDrive, Network, CheckCircle2, Coffee } from "lucide-react";
+import {
+  Upload,
+  X,
+  Loader2,
+  Server,
+  HardDrive,
+  Network,
+  CheckCircle2,
+  Coffee,
+  BadgeCheck,
+  Boxes,
+  FileUp,
+  Layers,
+} from "lucide-react";
+
+type CreateMode = "vanilla" | "fabric" | "custom" | "modpack";
+
+const MODES: { id: CreateMode; label: string; icon: React.ElementType; description: string }[] = [
+  { id: "vanilla", label: "Official", icon: BadgeCheck, description: "Official Mojang server, downloaded automatically" },
+  { id: "fabric", label: "Fabric", icon: Boxes, description: "Fabric mod loader, downloaded automatically" },
+  { id: "custom", label: "Custom JAR", icon: FileUp, description: "Upload your own server .jar (Paper, Forge, ...)" },
+  { id: "modpack", label: "Modpack", icon: Layers, description: "Install a Fabric modpack from Modrinth" },
+];
 
 interface CreateInstanceDialogProps {
   isOpen: boolean;
@@ -41,16 +71,21 @@ export default function CreateInstanceDialog({
     nextRconPort += 1;
   }
 
+  const [mode, setMode] = useState<CreateMode>("vanilla");
   const [name, setName] = useState("");
-  const [minecraftVersion, setMinecraftVersion] = useState("1.20.4");
+  const [minecraftVersion, setMinecraftVersion] = useState("");
+  const [customVersion, setCustomVersion] = useState("1.20.4");
+  const [loaderVersion, setLoaderVersion] = useState("");
   const [ramGb, setRamGb] = useState(2);
   const [serverPort, setServerPort] = useState(nextServerPort);
   const [rconPort, setRconPort] = useState(nextRconPort);
   const [jarFile, setJarFile] = useState<File | null>(null);
+  const [modpack, setModpack] = useState<{ version: ModrinthVersion; hit: ModrinthSearchHit } | null>(null);
 
   // Java Runtimes
   const [javaRuntimes, setJavaRuntimes] = useState<JavaRuntime[]>([]);
   const [selectedJava, setSelectedJava] = useState<string>("");
+  const [javaTouched, setJavaTouched] = useState(false);
   const [loadingRuntimes, setLoadingRuntimes] = useState(false);
 
   useEffect(() => {
@@ -61,10 +96,6 @@ export default function CreateInstanceDialog({
       .then((list) => {
         if (!active) return;
         setJavaRuntimes(list);
-        const def = list.find((r) => r.is_default) || list[0];
-        if (def) {
-          setSelectedJava(def.id);
-        }
       })
       .catch((err) => console.error("Failed to load Java runtimes:", err))
       .finally(() => {
@@ -74,6 +105,16 @@ export default function CreateInstanceDialog({
       active = false;
     };
   }, [isOpen]);
+
+  // Downloaded servers default to the auto-selected official Java (matches the
+  // Minecraft version); custom jars default to the host's default runtime.
+  useEffect(() => {
+    if (javaTouched || javaRuntimes.length === 0) return;
+    const auto = javaRuntimes.find((r) => r.id === "temurin-auto");
+    const def = javaRuntimes.find((r) => r.is_default) || javaRuntimes[0];
+    const pick = mode !== "custom" && auto ? auto : def;
+    if (pick) setSelectedJava(pick.id);
+  }, [mode, javaRuntimes, javaTouched]);
 
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -109,6 +150,23 @@ export default function CreateInstanceDialog({
     }
   };
 
+  const handleModeChange = (next: CreateMode) => {
+    if (isLoading) return;
+    setMode(next);
+    setError(null);
+    // Fabric supports a different version list; let the picker choose again.
+    setMinecraftVersion("");
+    setLoaderVersion("");
+  };
+
+  const readyToSubmit =
+    name.trim().length > 0 &&
+    (mode === "custom"
+      ? Boolean(jarFile)
+      : mode === "modpack"
+      ? Boolean(modpack)
+      : Boolean(minecraftVersion) && (mode === "vanilla" || Boolean(loaderVersion)));
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canCreate) {
@@ -119,31 +177,61 @@ export default function CreateInstanceDialog({
       setError("Instance name is required");
       return;
     }
-    if (!jarFile) {
+    if (mode === "custom" && !jarFile) {
       setError("A Minecraft server .jar file is required");
+      return;
+    }
+    if (mode === "modpack" && !modpack) {
+      setError("Pick a modpack version first");
+      return;
+    }
+    if ((mode === "vanilla" || mode === "fabric") && !minecraftVersion) {
+      setError("Pick a Minecraft version");
       return;
     }
 
     setIsLoading(true);
     setError(null);
-    setUploadProgress(0);
-
-    const formData = new FormData();
-    formData.append("name", name.trim());
-    if (minecraftVersion.trim()) {
-      formData.append("minecraft_version", minecraftVersion.trim());
-    }
-    if (selectedJava.trim()) {
-      formData.append("java_runtime", selectedJava.trim());
-    }
-    formData.append("ram_gb", ramGb.toString());
-    formData.append("server_port", serverPort.toString());
-    formData.append("rcon_port", rconPort.toString());
-    formData.append("file", jarFile);
 
     try {
+      if (mode === "modpack" && modpack) {
+        const created = await createModpackInstance({
+          name: name.trim(),
+          version_id: modpack.version.id,
+          ram_gb: ramGb,
+          java_runtime: selectedJava.trim() || undefined,
+          server_port: serverPort,
+          rcon_port: rconPort,
+        });
+        onCreated?.();
+        onClose();
+        router.push(`/dashboard/${created.id}/content`);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("name", name.trim());
+      formData.append("server_type", mode);
+      const version = mode === "custom" ? customVersion.trim() : minecraftVersion;
+      if (version) {
+        formData.append("minecraft_version", version);
+      }
+      if (mode === "fabric" && loaderVersion) {
+        formData.append("loader_version", loaderVersion);
+      }
+      if (selectedJava.trim()) {
+        formData.append("java_runtime", selectedJava.trim());
+      }
+      formData.append("ram_gb", ramGb.toString());
+      formData.append("server_port", serverPort.toString());
+      formData.append("rcon_port", rconPort.toString());
+      if (mode === "custom" && jarFile) {
+        setUploadProgress(0);
+        formData.append("file", jarFile);
+      }
+
       const created = await createInstance(formData, (pct) => {
-        setUploadProgress(pct);
+        if (mode === "custom") setUploadProgress(pct);
       });
 
       onCreated?.();
@@ -160,11 +248,15 @@ export default function CreateInstanceDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fade-in select-none">
-      <Card className="max-w-lg w-full border-zinc-800 bg-zinc-900 shadow-2xl relative overflow-hidden">
+      <Card
+        className={`w-full border-zinc-800 bg-zinc-900 shadow-2xl relative overflow-hidden max-h-[92vh] flex flex-col ${
+          mode === "modpack" ? "max-w-2xl" : "max-w-lg"
+        }`}
+      >
         {/* Top gradient accent line */}
         <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
 
-        <CardHeader className="flex flex-row items-center justify-between pb-3 border-b border-zinc-800/80">
+        <CardHeader className="flex flex-row items-center justify-between pb-3 border-b border-zinc-800/80 shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
               <Server className="w-5 h-5" />
@@ -172,7 +264,7 @@ export default function CreateInstanceDialog({
             <div>
               <CardTitle className="text-lg font-bold text-white">Create Minecraft Instance</CardTitle>
               <CardDescription className="text-xs text-zinc-400">
-                Deploy a new isolated Minecraft server with custom JAR
+                {MODES.find((m) => m.id === mode)?.description}
               </CardDescription>
             </div>
           </div>
@@ -185,10 +277,30 @@ export default function CreateInstanceDialog({
           </button>
         </CardHeader>
 
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} className="flex-1 min-h-0 overflow-y-auto">
           <CardContent className="space-y-4 pt-4">
+            {/* Server type selector */}
+            <div className="grid grid-cols-4 gap-1.5 p-1 rounded-xl bg-zinc-950 border border-zinc-800">
+              {MODES.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => handleModeChange(m.id)}
+                  disabled={isLoading}
+                  className={`flex flex-col items-center gap-1 py-2 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                    mode === m.id
+                      ? "bg-indigo-600 text-white shadow-[0_0_12px_rgba(99,102,241,0.35)]"
+                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                  }`}
+                >
+                  <m.icon className="w-4 h-4" />
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
             {error && (
-              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400">
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400 select-text">
                 {error}
               </div>
             )}
@@ -208,20 +320,93 @@ export default function CreateInstanceDialog({
             </div>
 
             {/* Minecraft Version */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-zinc-300 flex items-center justify-between">
-                <span>Minecraft Version</span>
-                <span className="text-[10px] text-zinc-500 font-mono">e.g. 1.20.4</span>
-              </label>
-              <Input
-                type="text"
-                placeholder="1.20.4"
-                value={minecraftVersion}
-                onChange={(e) => setMinecraftVersion(e.target.value)}
-                disabled={isLoading}
-                className="bg-zinc-950 border-zinc-800 text-xs font-mono rounded-xl placeholder:text-zinc-600 focus-visible:ring-indigo-500"
-              />
-            </div>
+            {(mode === "vanilla" || mode === "fabric") && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-300">Minecraft Version</label>
+                <VersionPicker
+                  key={mode}
+                  serverType={mode}
+                  version={minecraftVersion}
+                  onVersionChange={setMinecraftVersion}
+                  loader={loaderVersion}
+                  onLoaderChange={setLoaderVersion}
+                  disabled={isLoading}
+                />
+              </div>
+            )}
+
+            {mode === "custom" && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-300 flex items-center justify-between">
+                  <span>Minecraft Version</span>
+                  <span className="text-[10px] text-zinc-500 font-mono">any value, e.g. 1.20.4</span>
+                </label>
+                <Input
+                  type="text"
+                  placeholder="1.20.4"
+                  value={customVersion}
+                  onChange={(e) => setCustomVersion(e.target.value)}
+                  disabled={isLoading}
+                  className="bg-zinc-950 border-zinc-800 text-xs font-mono rounded-xl placeholder:text-zinc-600 focus-visible:ring-indigo-500"
+                />
+              </div>
+            )}
+
+            {/* Modpack picker */}
+            {mode === "modpack" && (
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-zinc-300 flex items-center justify-between">
+                  <span>Modrinth Modpack</span>
+                  <span className="text-[10px] text-zinc-500">Fabric packs only</span>
+                </label>
+                {modpack ? (
+                  <div className="p-3 rounded-xl border border-indigo-500/30 bg-indigo-500/5 flex items-center gap-3">
+                    {modpack.hit.icon_url ? (
+                      <img
+                        src={modpack.hit.icon_url}
+                        alt=""
+                        className="w-10 h-10 rounded-lg bg-zinc-800 object-cover shrink-0"
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0">
+                        <Layers className="w-5 h-5 text-zinc-500" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-white truncate flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                        {modpack.hit.title}
+                      </p>
+                      <p className="text-[11px] text-zinc-400 font-mono truncate">
+                        {modpack.version.version_number} · Minecraft {modpack.version.game_versions.join(", ")}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setModpack(null)}
+                      disabled={isLoading}
+                      className="shrink-0 px-3 py-1.5 rounded-lg border border-zinc-700 hover:border-zinc-600 hover:bg-zinc-800 text-xs font-semibold text-zinc-200 transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      Change
+                    </button>
+                  </div>
+                ) : (
+                  <div className="max-h-80 overflow-y-auto pr-1 select-text">
+                    <ModrinthBrowser
+                      projectType="modpack"
+                      loader="fabric"
+                      actionLabel="Select"
+                      onSelect={(version, hit) => {
+                        setModpack({ version, hit });
+                        if (!name.trim()) setName(hit.title);
+                        setError(null);
+                      }}
+                      disabled={isLoading}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Java Runtime */}
             <div className="space-y-1.5">
@@ -235,7 +420,10 @@ export default function CreateInstanceDialog({
               </label>
               <select
                 value={selectedJava}
-                onChange={(e) => setSelectedJava(e.target.value)}
+                onChange={(e) => {
+                  setSelectedJava(e.target.value);
+                  setJavaTouched(true);
+                }}
                 disabled={isLoading || loadingRuntimes}
                 className="w-full bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer font-mono"
               >
@@ -298,46 +486,60 @@ export default function CreateInstanceDialog({
             </div>
 
             {/* JAR File Upload */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-zinc-300">Server JAR File</label>
-              <div
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={handleFileDrop}
-                onClick={() => !isLoading && fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-all ${
-                  jarFile
-                    ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-400"
-                    : "border-zinc-800 hover:border-zinc-700 bg-zinc-950/50 text-zinc-400"
-                }`}
-              >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".jar"
-                  onChange={handleFileSelect}
-                  className="hidden"
-                />
-                {jarFile ? (
-                  <div className="flex items-center justify-center gap-2">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-                    <span className="text-xs font-semibold truncate">{jarFile.name}</span>
-                    <span className="text-[10px] text-zinc-500">
-                      ({(jarFile.size / 1024 / 1024).toFixed(1)} MB)
-                    </span>
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    <Upload className="w-5 h-5 mx-auto text-zinc-500 mb-1" />
-                    <p className="text-xs font-semibold text-zinc-300">
-                      Click or drag and drop your server <span className="text-indigo-400">.jar</span> here
-                    </p>
-                    <p className="text-[10px] text-zinc-500">
-                      Supports Paper, Purpur, Fabric, Vanilla, or Forge
-                    </p>
-                  </div>
-                )}
+            {mode === "custom" && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-300">Server JAR File</label>
+                <div
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={handleFileDrop}
+                  onClick={() => !isLoading && fileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-all ${
+                    jarFile
+                      ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-400"
+                      : "border-zinc-800 hover:border-zinc-700 bg-zinc-950/50 text-zinc-400"
+                  }`}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".jar"
+                    onChange={handleFileSelect}
+                    className="hidden"
+                  />
+                  {jarFile ? (
+                    <div className="flex items-center justify-center gap-2">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                      <span className="text-xs font-semibold truncate">{jarFile.name}</span>
+                      <span className="text-[10px] text-zinc-500">
+                        ({(jarFile.size / 1024 / 1024).toFixed(1)} MB)
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <Upload className="w-5 h-5 mx-auto text-zinc-500 mb-1" />
+                      <p className="text-xs font-semibold text-zinc-300">
+                        Click or drag and drop your server <span className="text-indigo-400">.jar</span> here
+                      </p>
+                      <p className="text-[10px] text-zinc-500">
+                        Supports Paper, Purpur, Fabric, Vanilla, or Forge
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
+
+            {(mode === "vanilla" || mode === "fabric") && (
+              <p className="text-[11px] text-zinc-500">
+                The server downloads the official jar itself on first start; progress is shown in the console.
+              </p>
+            )}
+            {mode === "modpack" && (
+              <p className="text-[11px] text-zinc-500">
+                The server downloads the modpack and all of its mods itself. You&apos;ll see the progress on the Mods
+                &amp; Packs page.
+              </p>
+            )}
 
             {/* Progress Bar during upload */}
             {uploadProgress !== null && (
@@ -363,7 +565,7 @@ export default function CreateInstanceDialog({
               </Button>
               <Button
                 type="submit"
-                disabled={isLoading || !name.trim() || !jarFile}
+                disabled={isLoading || !readyToSubmit}
                 className="text-xs font-bold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white"
               >
                 {isLoading ? (
@@ -371,8 +573,10 @@ export default function CreateInstanceDialog({
                     <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
                     Creating Instance...
                   </>
+                ) : mode === "modpack" ? (
+                  "Create & Install Modpack"
                 ) : (
-                  "Create & Launch"
+                  "Create Instance"
                 )}
               </Button>
             </div>

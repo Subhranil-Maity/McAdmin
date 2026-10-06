@@ -19,8 +19,12 @@ import {
   getInstance,
   getMyInstancePermissions,
   getMetricsHistory,
+  getBackendBaseUrl,
   getBackendWsUrl,
+  getJob,
+  listInstanceJobs,
   parseLogLine,
+  JobInfo,
   ServerStatus,
   ConsoleLog,
   Player,
@@ -113,6 +117,15 @@ interface DashboardContextType {
 
   // Console Ref
   consoleEndRef: React.RefObject<HTMLDivElement | null>;
+
+  // Background jobs (content installs, identify, modpacks)
+  /** Jobs for this instance, newest first (running + finished, not dismissed). */
+  jobs: JobInfo[];
+  /** Start following a job by id (polls as a fallback to WebSocket updates). */
+  trackJob: (jobId: string) => void;
+  dismissJob: (jobId: string) => void;
+  /** Increments whenever a job finishes, so views can reload their data. */
+  jobsFinishedCount: number;
 
   // Handlers
   handlePowerAction: (action: "start" | "stop" | "restart") => Promise<void>;
@@ -224,6 +237,13 @@ export function DashboardProvider({
 
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
+  // Background jobs
+  const [jobsMap, setJobsMap] = useState<Record<string, JobInfo>>({});
+  const [jobsFinishedCount, setJobsFinishedCount] = useState(0);
+  const jobStatesRef = useRef<Record<string, JobInfo["state"]>>({});
+  const dismissedJobsRef = useRef<Set<string>>(new Set());
+  const lastJobWsAtRef = useRef(0);
+
   const refreshAllInstances = async () => {
     try {
       const list = await listInstances();
@@ -242,6 +262,72 @@ export function DashboardProvider({
       console.error("Failed to refresh instance detail:", e);
     }
   };
+
+  const upsertJob = (job: JobInfo) => {
+    if (instanceId && job.instance_id !== instanceId) return;
+    const prevState = jobStatesRef.current[job.id];
+    jobStatesRef.current[job.id] = job.state;
+    if (!dismissedJobsRef.current.has(job.id)) {
+      setJobsMap((prev) => ({ ...prev, [job.id]: job }));
+    }
+    if (prevState === "running" && job.state !== "running") {
+      setJobsFinishedCount((n) => n + 1);
+      if (job.kind === "modpack") {
+        refreshInstanceDetail();
+        refreshAllInstances();
+      }
+    }
+  };
+  const upsertJobRef = useRef(upsertJob);
+  useEffect(() => {
+    upsertJobRef.current = upsertJob;
+  });
+
+  const trackJob = (jobId: string) => {
+    if (!jobStatesRef.current[jobId]) jobStatesRef.current[jobId] = "running";
+    getJob(jobId)
+      .then((job) => upsertJobRef.current(job))
+      .catch((err) => console.error("Failed to load job:", err));
+  };
+
+  const dismissJob = (jobId: string) => {
+    dismissedJobsRef.current.add(jobId);
+    setJobsMap((prev) => {
+      const next = { ...prev };
+      delete next[jobId];
+      return next;
+    });
+  };
+
+  // Pick up running jobs on load (e.g. after a page refresh).
+  useEffect(() => {
+    if (!instanceId || !getBackendBaseUrl()) return;
+    setJobsMap({});
+    jobStatesRef.current = {};
+    listInstanceJobs(instanceId)
+      .then((list) => list.filter((j) => j.state === "running").forEach((j) => upsertJobRef.current(j)))
+      .catch(() => {});
+  }, [instanceId]);
+
+  // Poll running jobs when WebSocket updates aren't arriving.
+  const runningJobIds = Object.values(jobsMap)
+    .filter((j) => j.state === "running")
+    .map((j) => j.id)
+    .join(",");
+  useEffect(() => {
+    if (!runningJobIds) return;
+    const timer = setInterval(() => {
+      if (Date.now() - lastJobWsAtRef.current < 2000) return;
+      runningJobIds.split(",").forEach((id) => {
+        getJob(id)
+          .then((job) => upsertJobRef.current(job))
+          .catch(() => {});
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [runningJobIds]);
+
+  const jobs = Object.values(jobsMap).sort((a, b) => b.started_at.localeCompare(a.started_at));
 
   const [isConsoleActive, setConsoleActive] = useState(false);
   const [isConsoleLogsLoading, setIsConsoleLogsLoading] = useState(false);
@@ -370,6 +456,11 @@ export function DashboardProvider({
               case "log_clear": {
                 lastSeenLogIndexRef.current = -1;
                 setLogs([]);
+                break;
+              }
+              case "job": {
+                lastJobWsAtRef.current = Date.now();
+                upsertJobRef.current(msg.data);
                 break;
               }
             }
@@ -651,6 +742,10 @@ export function DashboardProvider({
         whitelistLoading,
         actionPlayerId,
         consoleEndRef,
+        jobs,
+        trackJob,
+        dismissJob,
+        jobsFinishedCount,
         handlePowerAction,
         handleSendCommand,
         handleAddWhitelist,

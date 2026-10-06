@@ -1,4 +1,4 @@
-export type ServerStatusState = "ONLINE" | "OFFLINE" | "STARTING" | "STOPPING";
+export type ServerStatusState = "ONLINE" | "OFFLINE" | "STARTING" | "STOPPING" | "INSTALLING";
 
 export interface ServerStatus {
   status: ServerStatusState;
@@ -40,6 +40,9 @@ export interface WsStatusMetrics {
   max_players: number;
   minecraft_version?: string | null;
   java_runtime?: string | null;
+  server_type?: "vanilla" | "fabric" | "custom";
+  loader_version?: string | null;
+  version_status?: "official" | "unknown";
   /** When the CPU/RAM sample was taken (unix ms); absent while offline. */
   sampled_at_ms?: number | null;
 }
@@ -60,7 +63,8 @@ export type ServerWsMessage =
   | { type: "log"; data: WsIndexedLog }
   | { type: "log_clear" }
   | { type: "command_result"; data: { status: string; command: string; response: string } }
-  | { type: "pong" };
+  | { type: "pong" }
+  | { type: "job"; data: import("./modrinth").JobInfo };
 
 export interface CommandResponse {
   status: string;

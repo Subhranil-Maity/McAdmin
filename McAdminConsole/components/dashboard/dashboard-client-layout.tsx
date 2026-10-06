@@ -19,6 +19,7 @@ import {
   Shield,
   ArrowLeft,
   Check,
+  Package,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatUptime } from "@/lib/mc-server";
@@ -86,6 +87,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
     },
     { id: "properties", label: "Properties", icon: FileText, badge: null, path: `${baseRoute}/properties` },
     { id: "files", label: "Files", icon: Folder, badge: null, path: `${baseRoute}/files` },
+    { id: "content", label: "Mods & Packs", icon: Package, badge: null, path: `${baseRoute}/content` },
     { id: "admins", label: "Admins", icon: Shield, badge: instanceDetail?.admins?.length ? `${instanceDetail.admins.length}` : null, path: `${baseRoute}/admins` },
   ];
 
@@ -99,7 +101,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
 
   const isServerOnline = status?.status === "ONLINE";
   const isServerOffline = status?.status === "OFFLINE";
-  const isServerStopping = status?.status === "STOPPING";
+  const isServerStopping = status?.status === "STOPPING" || status?.status === "INSTALLING";
 
   const serverName = instanceDetail?.name || "Minecraft Server";
 
@@ -163,7 +165,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
                         className={`w-1.5 h-1.5 rounded-full ${
                           inst.status === "ONLINE"
                             ? "bg-emerald-400 shadow-[0_0_6px_#10b981]"
-                            : inst.status === "STARTING" || inst.status === "STOPPING"
+                            : inst.status === "STARTING" || inst.status === "STOPPING" || inst.status === "INSTALLING"
                             ? "bg-amber-400"
                             : "bg-rose-400"
                         }`}
@@ -242,7 +244,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
         <header className="px-6 py-4 border-b border-zinc-900 bg-zinc-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shrink-0 shadow-sm z-10">
           <div>
             <h2 className="text-lg font-black text-white flex items-center gap-2 capitalize">
-              {activeTabId}
+              {menuItems.find((m) => m.id === activeTabId)?.label ?? activeTabId}
             </h2>
             <p className="text-xs text-zinc-500">
               {status?.status === "ONLINE"
@@ -253,6 +255,8 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
                 ? "Starting Minecraft server process..."
                 : status?.status === "STOPPING"
                 ? "Stopping server (saving world)..."
+                : status?.status === "INSTALLING"
+                ? "Installing modpack..."
                 : "Server is offline"}
             </p>
           </div>

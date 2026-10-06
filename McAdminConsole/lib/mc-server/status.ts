@@ -50,7 +50,8 @@ export async function getServerStatus(instanceId?: string): Promise<ServerStatus
       data.status === "ONLINE" ||
       data.status === "OFFLINE" ||
       data.status === "STARTING" ||
-      data.status === "STOPPING"
+      data.status === "STOPPING" ||
+      data.status === "INSTALLING"
         ? data.status
         : "OFFLINE";
 
