@@ -1,60 +1,299 @@
+<div align="center">
+
 # McAdmin
 
-[![Rust](https://img.shields.io/badge/Rust-2024_Edition-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-[![Vite](https://img.shields.io/badge/Vite-8-646CFF?style=flat-square&logo=vite)](https://vite.dev/)
-[![React Router](https://img.shields.io/badge/React_Router-7-CA4245?style=flat-square&logo=reactrouter)](https://reactrouter.com/)
-[![React](https://img.shields.io/badge/React-19.2.4-blue?style=flat-square&logo=react)](https://react.dev/)
-[![Axum](https://img.shields.io/badge/Axum-0.8.9-red?style=flat-square)](https://github.com/tokio-rs/axum)
-[![WebSockets](https://img.shields.io/badge/WebSockets-Full_Duplex-green?style=flat-square)](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API)
-[![Bun](https://img.shields.io/badge/Bun-1.0+-yellow?style=flat-square&logo=bun)](https://bun.sh/)
+**Run your Minecraft servers from a web page.**
+
+Start and stop servers, chat in the console, install mods and invite friends to help, all from your browser.
+No databases to set up, and it barely uses any of your computer's memory.
+
+[![Built with Rust](https://img.shields.io/badge/Built_with-Rust-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![Memory](https://img.shields.io/badge/Background_service-~17_MB_RAM-brightgreen?style=flat-square)](#light-on-your-computer)
+[![No database](https://img.shields.io/badge/Database-not_needed-blue?style=flat-square)](#light-on-your-computer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-emerald?style=flat-square)](LICENSE)
 
-A high-performance, self-contained Minecraft server management platform built with a **Rust / Axum** daemon and a **React (Vite + React Router) single-page** web console. 
+<img src="assets/dashboard.png" alt="McAdmin home screen showing two Minecraft servers, one online and one offline" width="900">
 
-Unlike traditional control panels that demand heavy external services (MySQL, Redis, RabbitMQ) and consume gigabytes of host memory, McAdmin is completely self-contained. It operates with **zero external database dependencies**, keeps a daemon footprint **under 20MB of RAM**, and delivers multi-instance orchestration, real-time WebSocket telemetry, dynamic Java switching, and an 18-point granular security model.
-
----
-
-## Highlights & Features
-
-- **Multi-Instance Orchestration**: Create, configure, launch, and manage multiple isolated Minecraft server instances independently with dedicated directories, ports, and resource quotas.
-- **Real-Time Full-Duplex WebSockets (`/api/instances/{id}/ws`)**:
-  - Sub-millisecond console log streaming directly from process standard output/error pipes.
-  - Bounded circular ring buffer with automatic lag recovery (`circular-queue` + `tokio::sync::broadcast`).
-  - Live hardware telemetry pushed every 1,500ms (CPU%, RAM bytes, online player counts, server state).
-  - Out-of-band interactive command execution via Tokio RCON with immediate response frames.
-- **18-Point Granular Role-Based Access Control (RBAC)**:
-  - **7 Operational Categories**: Server Operations (Start, Stop, Restart independently), Logs & Console, Player Management, Whitelist Controls, File Manager, Server Properties, and Team Access.
-  - **1-Click "Make Admin" Promotion**: Instantly grant all 18 permissions in a single atomic update.
-  - **Role Presets**: `Administrator` (18/18), `Moderator` (11/18), `Viewer` (5/18), or arbitrary `Custom` overrides.
-  - **Hardened API Guards**: Axum handlers verify permissions with `user.require_permissions()`, returning structured HTTP 403 Forbidden with missing capability identifiers.
-- **Official Server Downloads**: Create Official (Mojang) or Fabric servers by picking a version. The worker downloads and verifies the jar itself, and re-downloads it when you change the version. Custom JAR uploads still work, and any version string is accepted (unofficial ones show as "unknown"). The version list is cached on disk, so a stale or offline list never breaks existing servers.
-- **Modrinth Integration (Mods & Packs tab)**:
-  - Browse and install Fabric mods (with required dependencies), datapacks and server resource packs. All downloads happen on the worker, not in the browser.
-  - Install Fabric modpacks (`.mrpack`) onto an existing server or create a new server from a modpack.
-  - **Identify mods**: match jars you already have to Modrinth by file hash and check for updates. Metadata and icons are cached locally, so the installed list works while Modrinth is offline.
-  - Respects Modrinth's rate limit with live progress bars, and shows a Retry button when Modrinth can't be reached.
-- **Dynamic Java Runtime Switching**: Automatically scans host system installations (`/usr/lib/jvm`, `/opt/java`, `PATH`) and allows binding different OpenJDK versions (Java 8, 11, 17, 21+) per instance with zero `JAVA_HOME` conflicts.
-- **Web-Based File Manager**:
-  - Full directory tree navigation with path-traversal security guards.
-  - In-browser text editor for configs (`server.properties`, YAML, JSON).
-  - Chunked multipart file uploader supporting assets up to 1GB.
-  - Safe file and directory deletion.
-- **Player & Whitelist Administration**: Track connected and historical players, kick, ban, unban, op, de-op, and manage server whitelist entries directly from the dashboard.
-- **Server Properties Panel**: Dual-mode editor offering both high-level frequent settings (Difficulty, PvP, Max Players, View Distance) and raw key-value editors.
-- **Self-Contained In-House Authentication**:
-  - Dual-mode JWT support (`Authorization: Bearer <token>` and `mcadmin_token` HTTP cookie).
-  - Argon2id password hashing with memory-hard resistance against GPU attacks.
-  - Automatic bootstrapping for the first registered user as superuser.
-  - Atomic JSON persistence (`users.json`, `roles.json`, `mc_config.json`, `java_runtimes.json`).
+</div>
 
 ---
 
-## Architecture Overview
+## What can it do?
+
+### See all your servers at a glance
+
+Every server gets a card showing whether it's online, its address, memory and how many players are on. Start or stop it with one click (that's the screen at the top of this page).
+
+### Make a new server in seconds
+
+Pick **Official**, **Fabric**, a **Modpack** or upload your own server file. Choose a Minecraft version from the list and McAdmin downloads everything for you, Java included.
+
+<div align="center">
+
+<img src="assets/create.png" alt="Create server window with version picker" width="850">
+
+</div>
+
+### Watch your server's health
+
+See CPU and memory use as it happens. Change how much memory a server gets, or switch its Minecraft version, from the same page.
+
+<div align="center">
+
+<img src="assets/overview.png" alt="Server overview with CPU, memory and disk usage" width="850">
+
+</div>
+
+> [!NOTE]
+> The **Disk Storage** (world size) card isn't working yet. It always shows a placeholder value (2.34 GB / 25 GB), not your server's real size. It will be fixed soon
+
+### Use the live console
+
+The server log streams in as it happens, and you can type commands like `/say`, `/time set day` or `/whitelist add` right in the browser.
+
+<div align="center">
+
+<img src="assets/console.png" alt="Live server console with a command box" width="850">
+
+</div>
+
+### Install mods with a click
+
+Search [Modrinth](https://modrinth.com) from inside McAdmin and install Fabric mods, datapacks, resource packs and whole modpacks. Mods the server needs are added for you. Already have mods? McAdmin can recognise them and tell you when updates are out.
+
+<div align="center">
+
+<img src="assets/mods.png" alt="Mod browser showing popular Fabric mods" width="850">
+
+</div>
+
+### Edit files and settings without FTP
+
+Browse your server's folders, upload files (up to 1 GB), and edit configs in the browser. Common settings like difficulty, game mode and view distance have simple controls, so you don't need to touch `server.properties` by hand.
+
+<div align="center">
+
+<table align="center">
+  <tr>
+    <td align="center"><img src="assets/files.png" alt="File manager"></td>
+    <td align="center"><img src="assets/properties.png" alt="Server settings"></td>
+  </tr>
+</table>
+
+</div>
+
+### Let friends help, safely
+
+Give each person only the access they need. Make someone a **Moderator** who can kick and ban but can't delete files, or a **Viewer** who can only watch. You can also pick permissions one by one, or make someone a full admin in one click.
+
+<div align="center">
+
+<img src="assets/team.png" alt="Team page showing an owner, a moderator and a viewer" width="850">
+
+</div>
+
+### Also included
+
+- **Players & whitelist:** see who's online, then kick, ban, op or whitelist them.
+- **Run many servers at once,** each with its own folder, port and memory limit.
+- **Java handled for you:** the right Java version is downloaded automatically for each Minecraft version.
+- **Safe shutdowns:** servers are told to save and `stop` properly before being closed.
+- **Your own accounts:** logins are stored on your machine. Nothing goes to a third-party service.
+
+---
+
+## Light on your computer
+
+McAdmin has two parts: a small background service written in **Rust** that looks after your servers, and the web page you use to control them.
+
+Rust programs are fast and use very little memory, so your RAM goes to Minecraft instead of the control panel. There's no MySQL, Redis or Docker to install. All settings are saved as small files in one folder.
+
+**Measured on Windows 11, running one Fabric 1.21.8 server with 4 GB assigned:**
+
+| What | Memory used |
+|---|---|
+| McAdmin background service (Rust) | **~17 MB** |
+| McAdmin web page server | ~100 MB |
+| The Minecraft server itself | ~2,100 MB |
+| Program size on disk | 11 MB |
+
+The background service used **under 4 seconds of CPU time** in 10 minutes. That included downloading the server, setting up Fabric, starting the server and streaming its log. Almost all of your computer's power stays with Minecraft.
+
+> Numbers will vary a little by system. The Minecraft server's memory depends on the amount you assign it.
+
+---
+
+## Coming soon
+
+- 📦 **Direct download:** a ready-to-run app you can download and open, with no Rust or Bun needed.
+- 🐳 **Docker container:** start McAdmin with a single `docker run` command.
+
+Until then, follow the steps below to set it up.
+
+---
+
+## Getting started
+
+### 1. Install what you need
+
+| Tool | Why | Get it |
+|---|---|---|
+| **Rust** | Builds the background service | [rustup.rs](https://rustup.rs) |
+| **Bun** | Builds the web page (only needed while building) | [bun.sh](https://bun.sh) |
+
+You don't need to install Java or download a Minecraft server. McAdmin does both for you.
+
+### 2. Download McAdmin
+
+```bash
+git clone https://github.com/Subhranil-Maity/McAdmin.git
+cd McAdmin
+```
+
+### 3. Create the settings file
+
+Copy the example and open it in any text editor:
+
+```bash
+cp McAdminWorker/.env.example McAdminWorker/.env
+```
+
+This is everything it can contain. Only the first three lines are required:
+
+```env
+# Which network address to listen on.
+#   127.0.0.1 = only this computer can open the panel
+#   0.0.0.0   = other computers on your network can open it too
+ADMIN_WORKER_HOST=127.0.0.1
+
+# The port the panel opens on: http://localhost:8000
+ADMIN_WORKER_PORT=8000
+
+# The folder where all your servers, worlds, mods and settings are kept.
+# It is created if it doesn't exist; make sure your user can write to it.
+HOME_DIR=/home/you/minecraft
+
+# Secret used to sign logins. Type any long random text, and keep it private.
+# If you change it later, everyone has to log in again.
+JWT_SECRET=type-any-long-random-text-here
+
+# Optional: address used to talk to your Minecraft servers' RCON (default 127.0.0.1).
+# RCON_HOST=127.0.0.1
+
+# Optional, advanced: only allow these other websites to use the API.
+# Not needed for normal use, because the panel and the API share one address.
+# CORS_ALLOWED_ORIGINS=http://localhost:3000
+```
+
+> [!TIP]
+> Quick way to make a random secret: `openssl rand -hex 32`
+
+### 4. Start it
+
+```bash
+./start.sh
+```
+
+The first run takes a few minutes. It builds the web page and the background service, then starts everything as **one program on one port**. Later runs only rebuild what changed. On Windows, run `start.sh` from Git Bash or WSL.
+
+### 5. Open it
+
+Go to **[http://localhost:8000](http://localhost:8000)** (or the port you set in `ADMIN_WORKER_PORT`) and create an account.
+
+> [!IMPORTANT]
+> **The first account you create becomes the owner** with full control. Make it yours before sharing the link with anyone.
+
+Press `Ctrl+C` in the terminal to stop McAdmin. Any running Minecraft servers are shut down safely.
+
+---
+
+## Common questions
+
+<details>
+<summary><b>Which server types are supported?</b></summary>
+
+Official (Mojang) and Fabric servers are downloaded automatically. For Paper, Purpur, Forge or anything else, choose **Custom JAR** and upload the server file yourself.
+</details>
+
+<details>
+<summary><b>Can my friends reach the panel from their own computers?</b></summary>
+
+Yes. Set `ADMIN_WORKER_HOST=0.0.0.0` in `McAdminWorker/.env`, restart McAdmin, and have them open `http://<your-computer's-address>:8000`. Nothing needs rebuilding, because the web page always talks to the address it was opened from.
+
+If people will reach it over the internet, put it behind HTTPS and set `ADMIN_WORKER_HOST=127.0.0.1` so the panel can't be reached without it:
+- **[Caddy](https://caddyserver.com)** (gets a certificate automatically), with a `Caddyfile` containing:
+  ```
+  panel.example.com {
+      reverse_proxy 127.0.0.1:8000
+  }
+  ```
+- **[Tailscale](https://tailscale.com)**: `tailscale serve 8000` gives you an HTTPS address that only your tailnet can open.
+
+Minecraft itself doesn't go through HTTPS. Players connect to each server's own port as usual.
+</details>
+
+<details>
+<summary><b>What if Modrinth or Mojang is down?</b></summary>
+
+Your existing servers keep working. The version list and mod info are saved locally, and a **Retry** button appears when a download site can't be reached.
+</details>
+
+<details>
+<summary><b>Where are my worlds stored?</b></summary>
+
+Inside the `HOME_DIR` folder you chose, under `instances/`. Each server gets its own folder, so backing up is just copying that folder.
+</details>
+
+---
+
+## For developers
+
+Everything technical is below. Click a section to expand it.
+
+<details>
+<summary><b>Development mode & running each part by hand</b></summary>
+
+- `./start.sh` (production): builds the console (`bun install` + `bun run build` -> `McAdminConsole/dist`), builds the worker in release mode, and runs **only the worker**. It serves the console and the API on one port, using `WEB_ROOT=McAdminConsole/dist`.
+- `./start.sh -d` (development): `cargo run` in `McAdminWorker` plus the Vite dev server with hot reload (`bun run dev`) on [http://localhost:3000](http://localhost:3000).
+
+`Ctrl+C` sends `SIGTERM` to the worker, which stops running Minecraft servers gracefully before exiting.
+
+For development the console needs to know where the worker is. Create `McAdminConsole/.env.local` (see `McAdminConsole/.env.example`):
+
+```env
+# Where the browser reaches the worker:
+#   same-origin           -> go through the dev server's /api proxy (recommended)
+#   host:port or full URL -> talk to that worker directly
+#   (empty)               -> mock mode, no backend
+VITE_BACKEND_URL=same-origin
+
+# Where the dev server's /api proxy (including WebSockets) forwards to
+MCADMIN_WORKER_URL=http://127.0.0.1:8000
+```
+
+To run the two parts separately:
+
+```bash
+# Terminal 1: background service (Rust / Axum), http://127.0.0.1:8000
+cd McAdminWorker
+cargo run
+
+# Terminal 2: web console (Vite + React Router), http://localhost:3000
+cd McAdminConsole
+bun install
+bun run dev
+```
+
+Other console scripts: `bun run build` (typecheck + static build in `dist/` with precompressed `.br`/`.gz` files), `bun run start` (preview `dist/` on :3000), `bun run lint`.
+
+</details>
+
+<details>
+<summary><b>Architecture Overview</b></summary>
 
 ```mermaid
 flowchart TB
-    subgraph Client ["Client Browser (Vite SPA + React 19)"]
+    subgraph Client ["Client Browser (Vite + React Router SPA, React 19)"]
         UI["McAdminConsole Dashboard"]
         WSCli["WebSocket Stream Manager"]
         AuthCtx["DashboardContext & AuthContext"]
@@ -63,6 +302,7 @@ flowchart TB
     subgraph Host ["Host Server"]
         subgraph Daemon ["McAdminWorker (Rust + Axum)"]
             Router["Axum Router & Tower Middleware"]
+            Static["Web Console Files\n(WEB_ROOT = McAdminConsole/dist)"]
             AuthGuard["Auth & Role Guard\n(Argon2id + JWT + require_permissions)"]
             WSHandler["WebSocket Handler\n(/api/instances/{id}/ws)"]
             ProcMgr["Process Manager\n(Tokio Child Processes)"]
@@ -86,6 +326,7 @@ flowchart TB
         end
     end
 
+    UI -->|"Loads page & assets (same origin)"| Static
     UI -->|"HTTP REST API (JWT Bearer / Cookie)"| Router
     WSCli <-->|"Full-Duplex WebSocket (/ws)"| WSHandler
     Router --> AuthGuard
@@ -108,9 +349,10 @@ flowchart TB
     ProcMgr --> Instances
 ```
 
----
+</details>
 
-## Repository Structure
+<details>
+<summary><b>Repository Structure</b></summary>
 
 ```text
 mcadmin/
@@ -127,144 +369,39 @@ mcadmin/
 |   |   |-- instance_runtime.rs # Tokio process runtime & log buffer
 |   |   |-- java_manager.rs  # Java detection & path resolution
 |   |   |-- role_manager.rs  # 18-point granular permissions engine
-|   |   \-- main.rs          # Entry point, router wiring & server bind
+|   |   |-- web.rs           # Serves the built web console (WEB_ROOT) + /config.js
+|   |   \-- main.rs          # Entry point, router wiring, CORS, log redaction & server bind
 |   |-- Cargo.toml           # Rust package configuration & dependencies
 |   \-- AGENTS.md            # Backend developer guide & technical notes
-|-- McAdminConsole/          # Vite + React Router administrative web console (static SPA)
-|   |-- index.html           # SPA entry (loads public/config.js, then app/main.tsx)
-|   |-- app/                 # Route pages & layouts (routes.tsx = route tree, main.tsx = entry)
-|   |   |-- dashboard/       # Main server control panel
+|-- McAdminConsole/          # Vite + React Router web console (static SPA)
+|   |-- index.html           # SPA entry (loads /config.js, then app/main.tsx)
+|   |-- app/
+|   |   |-- main.tsx         # Bootstraps React, router and fonts
+|   |   |-- routes.tsx       # Route tree (/, /dashboard/:uuid/<tab>, ...)
+|   |   |-- dashboard/       # Main server control panel pages & layouts
 |   |   |-- manageuser/      # User management view (superuser only)
-|   |   \-- layout.tsx       # Root application layout (AuthProvider + AppShell)
+|   |   \-- layout.tsx       # Root layout (auth provider + app shell)
 |   |-- components/
 |   |   |-- dashboard/       # Dashboard tabs (console, files, players, admins, properties)
 |   |   \-- ui/              # Radix UI / Shadcn accessible primitives
 |   |-- lib/
-|   |   |-- auth/            # Client-side authentication context & hooks
+|   |   |-- auth/            # Client-side authentication context & backend health checks
 |   |   \-- mc-server/       # API clients (instances, files, status, players)
-|   |-- public/config.js     # Runtime config (backend URL), editable without rebuilding
+|   |-- public/config.js     # Runtime config (backendUrl); the worker generates its own
+|   |-- scripts/compress.ts  # Writes .br/.gz copies of the build for the worker
 |   |-- types/               # Shared TypeScript models & role definitions
-|   \-- package.json         # Node/Bun dependencies & scripts
+|   |-- vite.config.ts       # Vite config (dev server, /api proxy, Tailwind)
+|   \-- package.json         # Bun dependencies & scripts
 |-- start.sh                 # Unified process orchestration script (dev / prod)
 \-- README.md                # Project documentation
 ```
 
----
+</details>
 
-## Getting Started
+<details>
+<summary><b>Configuration Reference</b></summary>
 
-### Prerequisites
-
-1. **Rust**: 1.85+ (or 2024 edition compatible toolchain).
-2. **Bun** (recommended) or **Node.js**: v18+.
-3. **Java**: At least one Java Runtime Environment (JRE/JDK 8, 17, or 21) installed on the host machine.
-4. **Minecraft Server JAR** (optional): Official and Fabric servers are downloaded automatically. You only need your own `.jar` for Paper, Purpur, Forge, etc.
-
----
-
-### Method 1: Using the Unified Startup Script (Recommended)
-
-The root `start.sh` script automates building and running both services concurrently with graceful process shutdown handling:
-
-#### Development Mode (Hot Reloading)
-```bash
-chmod +x start.sh
-./start.sh -d
-```
-* Runs `cargo run` in `McAdminWorker`
-* Runs `bun run dev` in `McAdminConsole`
-
-#### Production Mode
-```bash
-./start.sh
-```
-* Builds the console (`bun install` + `bun run build` -> `McAdminConsole/dist`)
-* Builds and runs the worker in release mode with `WEB_ROOT` pointing at `dist/`
-* **One process, one port**: open `http://<host>:8000` (`ADMIN_WORKER_PORT`). The worker serves the console and the API on the same origin, so no CORS or extra web server is needed.
-
-Press `Ctrl+C` to stop everything. The worker receives `SIGTERM` and stops running Minecraft servers gracefully (worlds are saved) before exiting.
-
-> [!TIP]
-> For HTTPS, put a reverse proxy in front of the worker, for example a Caddyfile containing `panel.example.com { reverse_proxy 127.0.0.1:8000 }`, or use `tailscale serve 8000` on a tailnet. Then bind the worker to `127.0.0.1` so it isn't reachable without HTTPS.
-
----
-
-### Method 2: Manual Step-by-Step Setup
-
-#### Step 1: Configure & Start `McAdminWorker`
-
-1. Navigate to the worker directory:
-   ```bash
-   cd McAdminWorker
-   ```
-
-2. Create a `.env` file:
-   ```env
-   ADMIN_WORKER_HOST=127.0.0.1
-   ADMIN_WORKER_PORT=8000
-   HOME_DIR=/path/to/minecraft/data
-   RCON_HOST=127.0.0.1
-   JWT_SECRET=super_secure_random_jwt_secret_key_at_least_32_chars
-   ```
-
-   > [!TIP]
-   > `HOME_DIR` is the master storage folder where all server instances, world saves, runtime registries, and configurations will be stored. Make sure the executing user has read/write permissions for this path.
-
-3. Run the backend daemon:
-   ```bash
-   # Development
-   cargo run
-
-   # Production
-   cargo run --release
-   ```
-
-The backend daemon will bind to `http://127.0.0.1:8000`.
-
----
-
-#### Step 2: Configure & Start `McAdminConsole`
-
-1. Navigate to the console directory:
-   ```bash
-   cd McAdminConsole
-   ```
-
-2. Create a `.env.local` file (see `.env.example`):
-   ```env
-   VITE_BACKEND_URL=http://localhost:8000
-   ```
-   Alternatively set `backendUrl` in `public/config.js` (or the deployed `dist/config.js`) at runtime; it takes precedence over `VITE_BACKEND_URL`.
-
-3. Install dependencies:
-   ```bash
-   bun install
-   # or: npm install
-   ```
-
-4. Launch the web dashboard:
-   ```bash
-   # Development
-   bun run dev
-
-   # Production build: static SPA in dist/ (with precompressed .br/.gz files)
-   bun run build
-   # Quick local check of the build (vite preview on :3000)
-   bun run start
-   ```
-
-5. Open [http://localhost:3000](http://localhost:3000) in your web browser.
-
-   For a real deployment, let the worker serve the build: start it with `WEB_ROOT=/path/to/McAdminConsole/dist` and open the worker's port instead (this is what `./start.sh` does). Any other static host works too, as long as unknown paths fall back to `index.html` and `/config.js` sets `backendUrl`.
-
-> [!IMPORTANT]
-> The **first user to register** through the web interface is automatically granted `is_superuser = true`, giving them root administrative authority across the entire platform.
-
----
-
-## Configuration Reference
-
-### `McAdminWorker` Environment Variables
+#### `McAdminWorker` Environment Variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -273,24 +410,25 @@ The backend daemon will bind to `http://127.0.0.1:8000`.
 | `HOME_DIR` | Yes | - | Absolute or relative path to the root storage directory. |
 | `RCON_HOST` | No | `127.0.0.1` | Hostname/IP used by the worker to connect to local instance RCON ports. |
 | `JWT_SECRET` | No | *Internal key* | HMAC-SHA256 secret for signing and verifying user JWT tokens. |
-| `WEB_ROOT` | No | *unset* | Path to the built console (`McAdminConsole/dist`). When set, the worker serves the web console on its own port (SPA fallback to `index.html`, precompressed assets, long-term caching for `/assets/*`). Unset = API only, and `GET /` is a health check. |
+| `WEB_ROOT` | No | *unset* | Folder with the built console (`McAdminConsole/dist`); `start.sh` sets it. When set, the worker serves the console on its own port: SPA fallback to `index.html`, precompressed assets, long-term caching for `/assets/*`. Unset = API only, and `GET /` is a health check. |
 | `WEB_BACKEND_URL` | No | `same-origin` | `backendUrl` handed to the console through the generated `/config.js` when `WEB_ROOT` is set. |
 | `CORS_ALLOWED_ORIGINS` | No | *mirror any origin* | Comma-separated origins allowed to call the API cross-origin (e.g. `http://localhost:3000`). Not needed when the worker serves the console itself. |
 
 Request logs redact `token`/`password` query values, so JWTs passed to WebSockets (`?token=`) never reach log files. `GET /api/health` is an always-available health check.
 
-### `McAdminConsole` Environment Variables
+#### `McAdminConsole` Environment Variables (development only)
+
+Put these in `McAdminConsole/.env.local`. A production build served by the worker doesn't need them, because the worker's `/config.js` overrides `VITE_BACKEND_URL`.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `VITE_BACKEND_URL` | No | `""` | Build-time fallback for the base URL where `McAdminWorker` is reachable (e.g., `http://localhost:8000`), or `same-origin`. Empty (and no runtime config) means mock mode. |
-| `MCADMIN_WORKER_URL` | No | `http://127.0.0.1:8000` | Dev/preview server only: target for the `/api` (+ WebSocket) proxy used with `same-origin`. |
+| `VITE_BACKEND_URL` | No | `""` | Where the browser reaches the worker: `same-origin`, `host:port` or a full URL. Empty (and no runtime config) means mock mode. |
+| `MCADMIN_WORKER_URL` | No | `http://127.0.0.1:8000` | Dev/preview server only: target of the `/api` (+ WebSocket) proxy used with `same-origin`. |
 
-At runtime, `window.__MCADMIN_CONFIG__.backendUrl` from `/config.js` (`public/config.js` in source, `dist/config.js` after a build) overrides `VITE_BACKEND_URL` without a rebuild, e.g. `window.__MCADMIN_CONFIG__ = { backendUrl: "same-origin" };`. Any static host can serve `dist/` as long as unknown paths fall back to `index.html`.
+</details>
 
----
-
-## 18-Point Granular Permissions Matrix
+<details>
+<summary><b>18-Point Granular Permissions Matrix</b></summary>
 
 Permissions are enforced per instance in `roles.json` and validated by Axum request guards:
 
@@ -315,16 +453,17 @@ Permissions are enforced per instance in `roles.json` and validated by Axum requ
 | | `properties_edit` | `properties:edit` | Yes | No | No |
 | **Team & Member Access** | `members_manage` | `members:manage` | Yes | No | No |
 
----
+</details>
 
-## WebSocket Protocol Specification (`/api/instances/{id}/ws`)
+<details>
+<summary><b>WebSocket protocol (<code>/api/instances/{id}/ws</code>)</b></summary>
 
 Full-duplex WebSocket connections support both binary-safe streaming and structured JSON frames.
 
-### Handshake & Authentication
+#### Handshake & Authentication
 Connect via `ws://<host>:<port>/api/instances/{id}/ws?token=<jwt_token>` (or using the `mcadmin_token` cookie).
 
-### Client Frames (Inbound)
+#### Client Frames (Inbound)
 ```json
 // Subscribe to live stdout/stderr log stream and receive backlog
 { "type": "subscribe_logs" }
@@ -339,7 +478,7 @@ Connect via `ws://<host>:<port>/api/instances/{id}/ws?token=<jwt_token>` (or usi
 { "type": "command", "command": "time set day" }
 ```
 
-### Server Frames (Outbound)
+#### Server Frames (Outbound)
 ```json
 // Live Telemetry Packet (Broadcasted every 1.5s)
 {
@@ -377,27 +516,29 @@ Connect via `ws://<host>:<port>/api/instances/{id}/ws?token=<jwt_token>` (or usi
 }
 ```
 
----
+</details>
 
-## Testing & Verification
+<details>
+<summary><b>Testing & Verification</b></summary>
 
-### Run Backend Unit Tests
+#### Run Backend Unit Tests
 ```bash
 cd McAdminWorker
 cargo test
 ```
 Runs unit tests for permission string mappings, split preset behaviors, legacy backward-compatibility, and thread-safe log buffer operations.
 
-### Typecheck & Build Frontend
+#### Typecheck & Build Frontend
 ```bash
 cd McAdminConsole
 bun run build
-# or: npm run build
 ```
-Typechecks the project with `tsc` and produces a static SPA bundle in `dist/` with Vite. Run `bun run lint` for ESLint.
+Typechecks with `tsc`, builds the static SPA into `dist/` with Vite, and writes precompressed `.br`/`.gz` copies for the worker. Run `bun run lint` for ESLint.
+
+</details>
 
 ---
 
 ## License
 
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+MIT. See [LICENSE](LICENSE).
