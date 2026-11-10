@@ -50,7 +50,7 @@
 
 /*
  * Self-hosted fonts (@fontsource-variable/*, imported in app/main.tsx).
- * These replace the CSS variables next/font used to inject on <html>.
+ * These define the font CSS variables that the Next.js font loader used to inject on <html>.
  */
 :root {
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
