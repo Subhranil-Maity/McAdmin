@@ -1,5 +1,3 @@
-"use client";
-
 import React from "react";
 import { UserCheck, Plus, Trash2, Loader2, Lock } from "lucide-react";
 import { Card } from "@/components/ui/card";

@@ -1,5 +1,3 @@
-"use client";
-
 import React, { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth/auth-context";
 import { UserRole } from "@/types/roles";
@@ -15,7 +13,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
 
-  const isDev = process.env.NODE_ENV === "development";
+  const isDev = import.meta.env.DEV;
   const role = user?.is_superuser ? UserRole.SUPERUSER : UserRole.USER;
   const canCreate = Boolean(isDev || user?.is_superuser || user?.permissions?.can_create_server);
 

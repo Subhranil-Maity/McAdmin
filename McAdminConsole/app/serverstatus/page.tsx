@@ -1,9 +1,6 @@
-"use client";
-
 import React, { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/lib/auth/auth-context";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { Link, useNavigate } from "react-router";
 import {
   Server,
   Wifi,
@@ -21,7 +18,7 @@ import { Button } from "@/components/ui/button";
 
 export default function ServerStatusPage() {
   const { user, isLoading, logout } = useAuth();
-  const router = useRouter();
+  const navigate = useNavigate();
 
   // Telemetry States
   const [status, setStatus] = useState<ServerStatus | null>(null);
@@ -35,9 +32,9 @@ export default function ServerStatusPage() {
   // Redirect if not signed in
   useEffect(() => {
     if (!isLoading && !user) {
-      router.replace("/");
+      navigate("/", { replace: true });
     }
-  }, [isLoading, user, router]);
+  }, [isLoading, user, navigate]);
 
   // Status Polling Effect
   useEffect(() => {
@@ -111,7 +108,7 @@ export default function ServerStatusPage() {
         {/* Navigation Toolbar */}
         <div className="flex items-center justify-between px-1">
           <Link
-            href="/"
+            to="/"
             className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
           >
             <ArrowLeft className="w-3.5 h-3.5" />

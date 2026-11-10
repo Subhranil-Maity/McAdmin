@@ -5,10 +5,30 @@ export const AUTH_TOKEN_KEY = "mcadmin_token";
 // Helper to simulate network latency
 export const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Special backend URL value meaning "the origin this console is served from". */
+export const SAME_ORIGIN = "same-origin";
+
+/**
+ * Raw configured backend URL. Resolution order:
+ *   1. `window.__MCADMIN_CONFIG__.backendUrl` (runtime, from /config.js)
+ *   2. `VITE_BACKEND_URL` (build time)
+ *   3. "" -> no backend configured (mock/fallback mode)
+ */
+export function getConfiguredBackendUrl(): string {
+  const runtime =
+    typeof window !== "undefined" ? window.__MCADMIN_CONFIG__?.backendUrl : undefined;
+  return (runtime || import.meta.env.VITE_BACKEND_URL || "").trim();
+}
+
 // Helper to construct backend base URL
 export function getBackendBaseUrl(): string {
-  let url = process.env.NEXT_PUBLIC_BACKEND_URL || "";
+  let url = getConfiguredBackendUrl();
   if (!url) return "";
+  if (url === SAME_ORIGIN) {
+    // An empty string must keep meaning "no backend", so same-origin is explicit.
+    if (typeof window === "undefined") return "";
+    url = window.location.origin;
+  }
   if (!/^https?:\/\//i.test(url)) {
     url = `http://${url}`;
   }

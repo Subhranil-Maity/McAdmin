@@ -1,5 +1,3 @@
-"use client";
-
 import React, { useState, useEffect, useCallback } from "react";
 import { useDashboard } from "./dashboard-context";
 import { useAuth } from "@/lib/auth/auth-context";
@@ -115,7 +113,7 @@ export default function AdminsTab() {
   const isOwner = Boolean(
     user && (members.owner?.id === user.id || instanceDetail?.owner_id === user.id)
   );
-  const isDev = process.env.NODE_ENV === "development";
+  const isDev = import.meta.env.DEV;
   const canManage = canManageMembers || isSuperuser || isOwner || isDev;
 
   const loadMembers = useCallback(async () => {

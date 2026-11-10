@@ -1,5 +1,3 @@
-"use client";
-
 import React, { createContext, useContext, useState, useEffect, useRef } from "react";
 import { UserRole } from "@/types/roles";
 import { useAuth } from "@/lib/auth/auth-context";
@@ -338,6 +336,8 @@ export function DashboardProvider({
   const reconnectAttemptRef = useRef<number>(0);
   const lastSeenLogIndexRef = useRef<number>(-1);
   const isConsoleActiveRef = useRef<boolean>(false);
+  // Mirrors state for the WebSocket handler; pre-existing pattern, kept as-is during the Vite migration.
+  // eslint-disable-next-line react-hooks/refs
   isConsoleActiveRef.current = isConsoleActive;
 
   // Real-time WebSocket connection replacing HTTP polling

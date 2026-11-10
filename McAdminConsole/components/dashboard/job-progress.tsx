@@ -1,5 +1,3 @@
-"use client";
-
 import React from "react";
 import { CheckCircle2, Clock, Loader2, XCircle, X } from "lucide-react";
 import { JobInfo } from "@/lib/mc-server";

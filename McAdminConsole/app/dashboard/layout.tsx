@@ -1,23 +1,17 @@
-"use client";
-
-import React, { useEffect } from "react";
+import { useEffect } from "react";
+import { Outlet, useNavigate } from "react-router";
 import { useAuth } from "@/lib/auth/auth-context";
-import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function DashboardLayout() {
   const { user, isLoading } = useAuth();
-  const router = useRouter();
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (!isLoading && !user) {
-      router.replace("/");
+      navigate("/", { replace: true });
     }
-  }, [user, isLoading, router]);
+  }, [user, isLoading, navigate]);
 
   if (isLoading) {
     return (
@@ -36,7 +30,7 @@ export default function DashboardLayout({
 
   return (
     <div className="flex-1 w-full flex flex-col bg-zinc-950 text-zinc-50 min-h-[calc(100vh-4rem)]">
-      {children}
+      <Outlet />
     </div>
   );
 }

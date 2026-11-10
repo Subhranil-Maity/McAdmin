@@ -1,7 +1,5 @@
-"use client";
-
 import React, { useState, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router";
 import {
   createInstance,
   createModpackInstance,
@@ -55,7 +53,7 @@ export default function CreateInstanceDialog({
   existingInstances,
   onCreated,
 }: CreateInstanceDialogProps) {
-  const router = useRouter();
+  const navigate = useNavigate();
 
   // Find next available ports
   const usedServerPorts = new Set(existingInstances.map((i) => i.server_port));
@@ -205,7 +203,7 @@ export default function CreateInstanceDialog({
         });
         onCreated?.();
         onClose();
-        router.push(`/dashboard/${created.id}/content`);
+        navigate(`/dashboard/${created.id}/content`);
         return;
       }
 
@@ -236,7 +234,7 @@ export default function CreateInstanceDialog({
 
       onCreated?.();
       onClose();
-      router.push(`/dashboard/${created.id}`);
+      navigate(`/dashboard/${created.id}`);
     } catch (err: unknown) {
       console.error("Failed to create instance:", err);
       const msg = err instanceof Error ? err.message : "Failed to create server instance";

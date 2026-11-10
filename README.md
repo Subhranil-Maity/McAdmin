@@ -1,14 +1,15 @@
 # McAdmin
 
 [![Rust](https://img.shields.io/badge/Rust-2024_Edition-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-[![Next.js](https://img.shields.io/badge/Next.js-16.2.10-black?style=flat-square&logo=next.js)](https://nextjs.org/)
+[![Vite](https://img.shields.io/badge/Vite-8-646CFF?style=flat-square&logo=vite)](https://vite.dev/)
+[![React Router](https://img.shields.io/badge/React_Router-7-CA4245?style=flat-square&logo=reactrouter)](https://reactrouter.com/)
 [![React](https://img.shields.io/badge/React-19.2.4-blue?style=flat-square&logo=react)](https://react.dev/)
 [![Axum](https://img.shields.io/badge/Axum-0.8.9-red?style=flat-square)](https://github.com/tokio-rs/axum)
 [![WebSockets](https://img.shields.io/badge/WebSockets-Full_Duplex-green?style=flat-square)](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API)
 [![Bun](https://img.shields.io/badge/Bun-1.0+-yellow?style=flat-square&logo=bun)](https://bun.sh/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-emerald?style=flat-square)](LICENSE)
 
-A high-performance, self-contained Minecraft server management platform built with a **Rust / Axum** daemon and a **Next.js / React** web console. 
+A high-performance, self-contained Minecraft server management platform built with a **Rust / Axum** daemon and a **React (Vite + React Router) single-page** web console. 
 
 Unlike traditional control panels that demand heavy external services (MySQL, Redis, RabbitMQ) and consume gigabytes of host memory, McAdmin is completely self-contained. It operates with **zero external database dependencies**, keeps a daemon footprint **under 20MB of RAM**, and delivers multi-instance orchestration, real-time WebSocket telemetry, dynamic Java switching, and an 18-point granular security model.
 
@@ -53,7 +54,7 @@ Unlike traditional control panels that demand heavy external services (MySQL, Re
 
 ```mermaid
 flowchart TB
-    subgraph Client ["Client Browser (Next.js 16 + React 19)"]
+    subgraph Client ["Client Browser (Vite SPA + React 19)"]
         UI["McAdminConsole Dashboard"]
         WSCli["WebSocket Stream Manager"]
         AuthCtx["DashboardContext & AuthContext"]
@@ -129,17 +130,19 @@ mcadmin/
 |   |   \-- main.rs          # Entry point, router wiring & server bind
 |   |-- Cargo.toml           # Rust package configuration & dependencies
 |   \-- AGENTS.md            # Backend developer guide & technical notes
-|-- McAdminConsole/          # Next.js / React administrative web console
-|   |-- app/                 # Next.js App Router routes & layouts
+|-- McAdminConsole/          # Vite + React Router administrative web console (static SPA)
+|   |-- index.html           # SPA entry (loads public/config.js, then app/main.tsx)
+|   |-- app/                 # Route pages & layouts (routes.tsx = route tree, main.tsx = entry)
 |   |   |-- dashboard/       # Main server control panel
 |   |   |-- manageuser/      # User management view (superuser only)
-|   |   \-- layout.tsx       # Root application layout
+|   |   \-- layout.tsx       # Root application layout (AuthProvider + AppShell)
 |   |-- components/
 |   |   |-- dashboard/       # Dashboard tabs (console, files, players, admins, properties)
 |   |   \-- ui/              # Radix UI / Shadcn accessible primitives
 |   |-- lib/
 |   |   |-- auth/            # Client-side authentication context & hooks
 |   |   \-- mc-server/       # API clients (instances, files, status, players)
+|   |-- public/config.js     # Runtime config (backend URL), editable without rebuilding
 |   |-- types/               # Shared TypeScript models & role definitions
 |   \-- package.json         # Node/Bun dependencies & scripts
 |-- start.sh                 # Unified process orchestration script (dev / prod)
@@ -176,7 +179,7 @@ chmod +x start.sh
 ./start.sh
 ```
 * Runs `cargo run --release` in `McAdminWorker`
-* Runs `bun run start` in `McAdminConsole`
+* Runs `bun run build` then `bun run start` (Vite preview of `dist/` on port 3000) in `McAdminConsole`
 
 Press `Ctrl+C` to gracefully terminate both background processes simultaneously.
 
@@ -223,10 +226,11 @@ The backend daemon will bind to `http://127.0.0.1:8000`.
    cd McAdminConsole
    ```
 
-2. Create a `.env.local` file:
+2. Create a `.env.local` file (see `.env.example`):
    ```env
-   NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+   VITE_BACKEND_URL=http://localhost:8000
    ```
+   Alternatively set `backendUrl` in `public/config.js` (or the deployed `dist/config.js`) at runtime; it takes precedence over `VITE_BACKEND_URL`.
 
 3. Install dependencies:
    ```bash
@@ -239,7 +243,7 @@ The backend daemon will bind to `http://127.0.0.1:8000`.
    # Development
    bun run dev
 
-   # Production
+   # Production (static build in dist/, served by vite preview)
    bun run build
    bun run start
    ```
@@ -267,7 +271,10 @@ The backend daemon will bind to `http://127.0.0.1:8000`.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `NEXT_PUBLIC_BACKEND_URL` | Yes | `""` | Base HTTP URL where `McAdminWorker` is reachable (e.g., `http://localhost:8000`). |
+| `VITE_BACKEND_URL` | No | `""` | Build-time fallback for the base URL where `McAdminWorker` is reachable (e.g., `http://localhost:8000`), or `same-origin`. Empty (and no runtime config) means mock mode. |
+| `MCADMIN_WORKER_URL` | No | `http://127.0.0.1:8000` | Dev/preview server only: target for the `/api` (+ WebSocket) proxy used with `same-origin`. |
+
+At runtime, `window.__MCADMIN_CONFIG__.backendUrl` from `/config.js` (`public/config.js` in source, `dist/config.js` after a build) overrides `VITE_BACKEND_URL` without a rebuild, e.g. `window.__MCADMIN_CONFIG__ = { backendUrl: "same-origin" };`. Any static host can serve `dist/` as long as unknown paths fall back to `index.html`.
 
 ---
 
@@ -375,7 +382,7 @@ cd McAdminConsole
 bun run build
 # or: npm run build
 ```
-Compiles and typechecks all Next.js routes and static pages with Turbopack.
+Typechecks the project with `tsc` and produces a static SPA bundle in `dist/` with Vite. Run `bun run lint` for ESLint.
 
 ---
 

@@ -1,5 +1,3 @@
-"use client";
-
 import React, { useState, useEffect } from "react";
 import {
   Search,
@@ -14,7 +12,7 @@ import {
   ArrowLeft,
   Server,
 } from "lucide-react";
-import Link from "next/link";
+import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getBackendBaseUrl, apiFetch } from "@/lib/mc-server/utils";
@@ -199,7 +197,7 @@ export default function ManageUsersClient({ currentUserId }: { currentUserId: st
         <div>
           <div className="flex items-center gap-3">
             <Link
-              href="/dashboard"
+              to="/dashboard"
               className="p-1.5 rounded-lg border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-900 transition-colors"
               title="Back to Servers"
             >

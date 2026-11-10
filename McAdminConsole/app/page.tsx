@@ -1,9 +1,7 @@
-"use client";
-
 import React, { useState } from "react";
 import { useAuth } from "@/lib/auth/auth-context";
 import { Shield, Sparkles, LayoutDashboard, Users, Key, LogIn } from "lucide-react";
-import Link from "next/link";
+import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import { LoginDialog } from "@/components/auth/login-dialog";
 
@@ -36,7 +34,7 @@ export default function Home() {
           ) : user ? (
             <>
               <Link
-                href="/dashboard"
+                to="/dashboard"
                 className="w-full sm:w-auto flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl text-sm font-semibold bg-white text-black hover:bg-zinc-200 active:scale-[0.98] transition-all duration-200"
               >
                 <LayoutDashboard className="w-4 h-4" />
@@ -44,7 +42,7 @@ export default function Home() {
               </Link>
               {user.is_superuser && (
                 <Link
-                  href="/manageuser"
+                  to="/manageuser"
                   className="w-full sm:w-auto flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl text-sm font-semibold bg-zinc-900 border border-zinc-800 text-white hover:bg-zinc-800 active:scale-[0.98] transition-all duration-200"
                 >
                   <Users className="w-4 h-4" />

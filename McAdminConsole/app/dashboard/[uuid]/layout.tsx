@@ -1,19 +1,18 @@
+import { Outlet, useParams } from "react-router";
 import { DashboardProvider } from "@/components/dashboard/dashboard-context";
 import DashboardClientLayout from "@/components/dashboard/dashboard-client-layout";
 
-export default async function InstanceDashboardLayout({
-  children,
-  params,
-}: {
-  children: React.ReactNode;
-  params: Promise<{ uuid: string }>;
-}) {
-  const { uuid } = await params;
-  const isDev = process.env.NODE_ENV === "development";
+export default function InstanceDashboardLayout() {
+  const { uuid = "" } = useParams<{ uuid: string }>();
+  const isDev = import.meta.env.DEV;
 
   return (
-    <DashboardProvider isDev={isDev} instanceId={uuid}>
-      <DashboardClientLayout>{children}</DashboardClientLayout>
+    // Keyed by instance so switching servers resets all per-instance state,
+    // matching the remount Next.js did when the dynamic segment changed.
+    <DashboardProvider key={uuid} isDev={isDev} instanceId={uuid}>
+      <DashboardClientLayout>
+        <Outlet />
+      </DashboardClientLayout>
     </DashboardProvider>
   );
 }

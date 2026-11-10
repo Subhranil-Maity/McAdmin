@@ -1,7 +1,5 @@
-"use client";
-
 import React, { useState, useEffect } from "react";
-import Link from "next/link";
+import { Link } from "react-router";
 import { UserRole } from "@/types/roles";
 import { InstanceSummary, deleteInstance, toggleServerPower, updateInstance } from "@/lib/mc-server";
 import { listJavaRuntimes, JavaRuntime } from "@/lib/mc-server/java";
@@ -343,7 +341,7 @@ export default function ServerGrid({
             <div className="p-5 pt-0 border-t border-zinc-850/60 flex items-center justify-between gap-2 mt-2 pt-4">
               {canManage ? (
                 <>
-                  <Link href={`/dashboard/${instance.id}`} className="flex-1">
+                  <Link to={`/dashboard/${instance.id}`} className="flex-1">
                     <Button
                       variant="outline"
                       className="w-full text-xs font-bold rounded-xl border-zinc-800 hover:border-zinc-700 bg-zinc-900 hover:bg-zinc-850 text-white cursor-pointer flex items-center justify-center gap-1.5 h-9"

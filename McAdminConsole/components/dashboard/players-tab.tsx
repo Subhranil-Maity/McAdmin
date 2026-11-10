@@ -1,5 +1,3 @@
-"use client";
-
 import React from "react";
 import { Users, Search, Lock } from "lucide-react";
 import { Card } from "@/components/ui/card";

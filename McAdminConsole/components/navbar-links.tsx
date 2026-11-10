@@ -1,13 +1,10 @@
-"use client";
-
 import React from "react";
 import { useAuth } from "@/lib/auth/auth-context";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { Link, useLocation } from "react-router";
 
 export function NavbarLinks() {
   const { user } = useAuth();
-  const pathname = usePathname();
+  const { pathname } = useLocation();
 
   if (!user) {
     return null;
@@ -16,7 +13,7 @@ export function NavbarLinks() {
   return (
     <nav className="flex items-center gap-4">
       <Link
-        href="/dashboard"
+        to="/dashboard"
         className={`text-sm font-medium transition-colors ${
           pathname.startsWith("/dashboard")
             ? "text-zinc-50 font-semibold"
@@ -27,7 +24,7 @@ export function NavbarLinks() {
       </Link>
       {user.is_superuser && (
         <Link
-          href="/manageuser"
+          to="/manageuser"
           className={`text-sm font-medium transition-colors ${
             pathname === "/manageuser"
               ? "text-zinc-50 font-semibold"

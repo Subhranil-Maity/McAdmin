@@ -1,5 +1,3 @@
-"use client";
-
 import React from "react";
 import { useDashboard } from "./dashboard-context";
 import OverviewTab from "./overview-tab";

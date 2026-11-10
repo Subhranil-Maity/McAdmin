@@ -1,5 +1,3 @@
-"use client";
-
 import React from "react";
 import { Terminal, Loader2, Lock, ShieldAlert } from "lucide-react";
 import { Card } from "@/components/ui/card";

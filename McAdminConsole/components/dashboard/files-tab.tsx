@@ -1,5 +1,3 @@
-"use client";
-
 import React, { useState, useEffect, useRef } from "react";
 import {
   Folder,
@@ -25,7 +23,7 @@ import {
   Lock,
   Package,
 } from "lucide-react";
-import Link from "next/link";
+import { Link, useNavigate } from "react-router";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -139,6 +137,7 @@ export default function FilesTab() {
     canUploadFiles,
     canDeleteFiles,
   } = useDashboard();
+  const navigate = useNavigate();
   const [currentPath, setCurrentPath] = useState<string>("/");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -201,17 +200,15 @@ export default function FilesTab() {
     }
   };
 
-  // Helper to update the URL query parameters
+  // Helper to update the URL query parameters (pushes a history entry; the
+  // popstate listener below restores state on back/forward).
   const updateUrl = (path: string, editFilename: string | null) => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams();
-      params.set("path", path);
-      if (editFilename) {
-        params.set("edit", editFilename);
-      }
-      const newUrl = `${window.location.pathname}?${params.toString()}`;
-      window.history.pushState(null, "", newUrl);
+    const params = new URLSearchParams();
+    params.set("path", path);
+    if (editFilename) {
+      params.set("edit", editFilename);
     }
+    navigate({ search: `?${params.toString()}` });
   };
 
   // Load a file directly (e.g. from URL parameters)
@@ -713,7 +710,7 @@ export default function FilesTab() {
         <div className="flex items-center gap-2 flex-shrink-0">
           {instanceId && (currentPath === "/mods" || /\/datapacks$/.test(currentPath)) && (
             <Link
-              href={`/dashboard/${instanceId}/content`}
+              to={`/dashboard/${instanceId}/content`}
               className="h-9 px-3 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white flex items-center gap-1.5 transition-colors"
             >
               <Package className="w-3.5 h-3.5" />

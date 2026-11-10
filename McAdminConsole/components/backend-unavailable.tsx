@@ -1,5 +1,3 @@
-"use client";
-
 import React, { useState, useEffect } from "react";
 import { ServerOff, RefreshCw, AlertTriangle, Activity, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -68,7 +66,7 @@ export function BackendUnavailable() {
             <div className="flex items-center justify-between">
               <span>TARGET URL:</span>
               <span className="text-zinc-200 font-medium truncate max-w-[200px]" title={backendUrl || "Not Configured"}>
-                {backendUrl || "(NEXT_PUBLIC_BACKEND_URL missing)"}
+                {backendUrl || "(backendUrl / VITE_BACKEND_URL missing)"}
               </span>
             </div>
             <div className="flex items-center justify-between">

@@ -1,5 +1,3 @@
-"use client";
-
 import React, { useEffect } from "react";
 import { useDashboard } from "@/components/dashboard/dashboard-context";
 import ConsoleTab from "@/components/dashboard/console-tab";

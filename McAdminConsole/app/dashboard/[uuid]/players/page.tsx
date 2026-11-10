@@ -1,5 +1,3 @@
-"use client";
-
 import React from "react";
 import { useDashboard } from "@/components/dashboard/dashboard-context";
 import PlayersTab from "@/components/dashboard/players-tab";

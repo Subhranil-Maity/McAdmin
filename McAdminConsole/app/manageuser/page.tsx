@@ -1,10 +1,8 @@
-"use client";
-
 import React from "react";
 import { useAuth } from "@/lib/auth/auth-context";
 import ManageUsersClient from "./manage-users-client";
 import { ShieldAlert, ArrowLeft, Terminal, Loader2 } from "lucide-react";
-import Link from "next/link";
+import { Link } from "react-router";
 
 export default function ManageUsersPage() {
   const { user, isLoading } = useAuth();
@@ -51,7 +49,7 @@ export default function ManageUsersPage() {
 
           <div className="pt-2">
             <Link
-              href="/dashboard"
+              to="/dashboard"
               className="inline-flex w-full items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-semibold bg-zinc-800 text-white hover:bg-zinc-700 active:scale-[0.98] transition-all duration-200"
             >
               <ArrowLeft className="w-4 h-4" />

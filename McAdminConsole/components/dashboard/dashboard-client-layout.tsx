@@ -1,7 +1,4 @@
-"use client";
-
 import React, { useState } from "react";
-import { usePathname } from "next/navigation";
 import { useDashboard } from "./dashboard-context";
 import {
   Terminal,
@@ -23,7 +20,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatUptime } from "@/lib/mc-server";
-import Link from "next/link";
+import { Link, useLocation } from "react-router";
 
 interface DashboardClientLayoutProps {
   children: React.ReactNode;
@@ -46,7 +43,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
     canRestartServer,
   } = useDashboard();
 
-  const pathname = usePathname();
+  const { pathname } = useLocation();
   const [isServerDropdownOpen, setIsServerDropdownOpen] = useState(false);
 
   // Loading state when initial fetch hasn't completed yet
@@ -133,7 +130,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
           {isServerDropdownOpen && (
             <div className="absolute top-full left-0 right-0 z-40 bg-zinc-900/95 border-b border-zinc-800 shadow-2xl backdrop-blur-md p-2 space-y-1 animate-fade-in max-h-64 overflow-y-auto">
               <Link
-                href="/dashboard"
+                to="/dashboard"
                 onClick={() => setIsServerDropdownOpen(false)}
                 className="flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg text-indigo-400 hover:bg-zinc-800/60 transition-colors"
               >
@@ -152,7 +149,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
                 return (
                   <Link
                     key={inst.id}
-                    href={`/dashboard/${inst.id}/overview`}
+                    to={`/dashboard/${inst.id}/overview`}
                     onClick={() => setIsServerDropdownOpen(false)}
                     className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
                       isCurrent
@@ -191,7 +188,7 @@ export default function DashboardClientLayout({ children }: DashboardClientLayou
             return (
               <Link
                 key={item.id}
-                href={item.path}
+                to={item.path}
                 className={`flex items-center justify-between w-full px-3 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer ${
                   isActive
                     ? "bg-zinc-900 text-zinc-100 border border-zinc-850 shadow-[0_0_10px_rgba(24,24,27,0.5)]"

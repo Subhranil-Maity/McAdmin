@@ -59,7 +59,7 @@ else
     PIDS+=($!)
 
     echo "[+] Building McAdminConsole (bun run build)..."
-    # (cd ./McAdminConsole && bun run build)
+    (cd ./McAdminConsole && bun run build)
 
     echo "[+] Starting McAdminConsole (bun run start)..."
     (cd ./McAdminConsole && bun run start) &
