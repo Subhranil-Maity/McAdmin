@@ -178,10 +178,14 @@ chmod +x start.sh
 ```bash
 ./start.sh
 ```
-* Runs `cargo run --release` in `McAdminWorker`
-* Runs `bun run build` then `bun run start` (Vite preview of `dist/` on port 3000) in `McAdminConsole`
+* Builds the console (`bun install` + `bun run build` -> `McAdminConsole/dist`)
+* Builds and runs the worker in release mode with `WEB_ROOT` pointing at `dist/`
+* **One process, one port**: open `http://<host>:8000` (`ADMIN_WORKER_PORT`). The worker serves the console and the API on the same origin, so no CORS or extra web server is needed.
 
-Press `Ctrl+C` to gracefully terminate both background processes simultaneously.
+Press `Ctrl+C` to stop everything. The worker receives `SIGTERM` and stops running Minecraft servers gracefully (worlds are saved) before exiting.
+
+> [!TIP]
+> For HTTPS, put a reverse proxy in front of the worker, for example a Caddyfile containing `panel.example.com { reverse_proxy 127.0.0.1:8000 }`, or use `tailscale serve 8000` on a tailnet. Then bind the worker to `127.0.0.1` so it isn't reachable without HTTPS.
 
 ---
 
@@ -243,12 +247,15 @@ The backend daemon will bind to `http://127.0.0.1:8000`.
    # Development
    bun run dev
 
-   # Production (static build in dist/, served by vite preview)
+   # Production build: static SPA in dist/ (with precompressed .br/.gz files)
    bun run build
+   # Quick local check of the build (vite preview on :3000)
    bun run start
    ```
 
 5. Open [http://localhost:3000](http://localhost:3000) in your web browser.
+
+   For a real deployment, let the worker serve the build: start it with `WEB_ROOT=/path/to/McAdminConsole/dist` and open the worker's port instead (this is what `./start.sh` does). Any other static host works too, as long as unknown paths fall back to `index.html` and `/config.js` sets `backendUrl`.
 
 > [!IMPORTANT]
 > The **first user to register** through the web interface is automatically granted `is_superuser = true`, giving them root administrative authority across the entire platform.
@@ -266,6 +273,11 @@ The backend daemon will bind to `http://127.0.0.1:8000`.
 | `HOME_DIR` | Yes | - | Absolute or relative path to the root storage directory. |
 | `RCON_HOST` | No | `127.0.0.1` | Hostname/IP used by the worker to connect to local instance RCON ports. |
 | `JWT_SECRET` | No | *Internal key* | HMAC-SHA256 secret for signing and verifying user JWT tokens. |
+| `WEB_ROOT` | No | *unset* | Path to the built console (`McAdminConsole/dist`). When set, the worker serves the web console on its own port (SPA fallback to `index.html`, precompressed assets, long-term caching for `/assets/*`). Unset = API only, and `GET /` is a health check. |
+| `WEB_BACKEND_URL` | No | `same-origin` | `backendUrl` handed to the console through the generated `/config.js` when `WEB_ROOT` is set. |
+| `CORS_ALLOWED_ORIGINS` | No | *mirror any origin* | Comma-separated origins allowed to call the API cross-origin (e.g. `http://localhost:3000`). Not needed when the worker serves the console itself. |
+
+Request logs redact `token`/`password` query values, so JWTs passed to WebSockets (`?token=`) never reach log files. `GET /api/health` is an always-available health check.
 
 ### `McAdminConsole` Environment Variables
 

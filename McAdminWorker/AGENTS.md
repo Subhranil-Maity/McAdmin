@@ -18,10 +18,27 @@ Rust/Axum service for managing multi-instance Minecraft servers with isolated ru
 - Java runtimes and executable paths are stored in `${HOME_DIR}/java_runtimes.json`.
 - Server instances reside in `${HOME_DIR}/instances/<instance_id>/`.
 
+- Optional:
+  - `WEB_ROOT`: Path to the built McAdminConsole (`McAdminConsole/dist`). Enables serving the web console (see below). Unset = API only.
+  - `WEB_BACKEND_URL`: `backendUrl` written into the generated `/config.js` (default `same-origin`).
+  - `CORS_ALLOWED_ORIGINS`: Comma-separated CORS allow-list (default: mirror any origin).
+
+## Web Console Serving (`src/web.rs`)
+
+- Enabled when `WEB_ROOT` contains an `index.html`; otherwise the worker is API-only and `GET /` is a health check.
+- `GET /config.js` is generated: `window.__MCADMIN_CONFIG__ = {"backendUrl": WEB_BACKEND_URL}` (`Cache-Control: no-cache`).
+- Every other non-`/api` path is served from `WEB_ROOT` via `tower_http::services::ServeDir` with `precompressed_br()`/`precompressed_gzip()` (siblings produced by `McAdminConsole/scripts/compress.ts`), falling back to `index.html` for client-side routes.
+- `/assets/*` (Vite fingerprinted) gets `public, max-age=31536000, immutable`; everything else `no-cache`.
+- Unknown `/api/*` paths return a JSON 404, never the HTML page.
+
+## Request Logging
+
+- `TraceLayer` spans log the method, version, and the URI with sensitive query values (`token`, `access_token`, `password`) replaced by `REDACTED` (`redact_uri` in `src/main.rs`), so WebSocket JWTs never reach logs.
+
 ## CORS Policy
 
 - Configured via `tower_http::cors::CorsLayer`:
-  - `allow_origin`: `AllowOrigin::mirror_request()` (dynamically echoes the incoming `Origin` to satisfy credentials on any domain, IP, Tailscale node, or LAN address).
+  - `allow_origin`: `AllowOrigin::list(...)` from `CORS_ALLOWED_ORIGINS` when set; otherwise `AllowOrigin::mirror_request()` (dynamically echoes the incoming `Origin` to satisfy credentials on any domain, IP, Tailscale node, or LAN address). Same-origin deployments (worker serving the console) need no CORS.
   - `allow_headers`: `AllowHeaders::mirror_request()`.
   - `allow_credentials`: `true`.
   - `allow_methods`: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `OPTIONS`, `HEAD`.
@@ -29,8 +46,8 @@ Rust/Axum service for managing multi-instance Minecraft servers with isolated ru
 ## Authentication & Authorization (In-House)
 
 - `JwtAuthLayer` middleware validates incoming requests:
-  - `OPTIONS` preflight requests, `GET /`, `GET /api/auth/health`, `POST /api/auth/register`, and `POST /api/auth/login` are public and bypass authentication.
-  - All other routes require authentication via `Authorization: Bearer <token>` or `mcadmin_token` cookie.
+  - `OPTIONS` preflight requests, every path outside `/api/` (`GET /`, the web console's static files, `/config.js`), `GET /api/health`, `GET /api/auth/health`, `POST /api/auth/register`, and `POST /api/auth/login` are public and bypass authentication.
+  - All other `/api/*` routes require authentication via `Authorization: Bearer <token>` or `mcadmin_token` cookie.
   - Passwords are securely hashed with Argon2id.
   - The first registered user is automatically bootstrapped with `is_superuser = true`.
 - Global Roles & Permissions (`users.json`):
@@ -104,7 +121,8 @@ Managed by `McConfigManager`:
 ## HTTP API Endpoints
 
 ### Health Check & Auth
-- `GET /`: Health check endpoint. Returns `OK`. **Public (no auth).**
+- `GET /api/health`: Health check endpoint. Returns `{"status":"ok","service":"mc_admin_worker"}`. **Public (no auth).**
+- `GET /`: Same health check when `WEB_ROOT` is unset; serves the web console when it is set. **Public (no auth).**
 - `GET /api/auth/health`: In-house auth system status. **Public (no auth).**
 - `POST /api/auth/register`: Register user account. First account gets superuser. **Public (no auth).**
 - `POST /api/auth/login`: Authenticate and return JWT token and user info. **Public (no auth).**

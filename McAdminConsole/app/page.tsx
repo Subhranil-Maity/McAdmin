@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useAuth } from "@/lib/auth/auth-context";
-import { Shield, Sparkles, LayoutDashboard, Users, Key, LogIn } from "lucide-react";
+import { LayoutDashboard, Users, LogIn } from "lucide-react";
 import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import { LoginDialog } from "@/components/auth/login-dialog";

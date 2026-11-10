@@ -190,8 +190,6 @@ export default function ServerGrid({
         const fullAddr = `${hostIp}:${instance.server_port}`;
         const isCopied = copiedPort === fullAddr;
 
-        const isOwner = instance.owner_id && currentUserId && instance.owner_id === currentUserId;
-        const isAdmin = currentUserId && instance.admins.includes(currentUserId);
 
         return (
           <Card

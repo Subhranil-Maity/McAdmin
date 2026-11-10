@@ -15,6 +15,7 @@ mod modpack;
 mod modrinth;
 mod role_manager;
 mod user_manager;
+mod web;
 
 use api::auth::{auth_health, login, me, register};
 use api::health;
@@ -54,7 +55,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::{
     cors::{AllowHeaders, AllowOrigin, CorsLayer},
-    trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
+    trace::{DefaultOnResponse, TraceLayer},
 };
 use tracing::{info, Level};
 use user_manager::UserManager;
@@ -170,9 +171,11 @@ async fn main() {
 
     info!("Loaded multi-instance runtime and in-house auth configuration");
 
+    let web_config = web::WebConfig::from_env();
+
     let app = Router::new()
         // Public / Health routes
-        .route("/", get(health))
+        .route("/api/health", get(health))
         .route("/api/auth/health", get(auth_health))
         .route("/api/auth/register", post(register))
         .route("/api/auth/login", post(login))
@@ -268,10 +271,28 @@ async fn main() {
         .route(
             "/api/instances/{id}/files/upload",
             post(upload_instance_file).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024)),
-        )
+        );
+
+    // With WEB_ROOT set, "/" and every other non-API path serve the web console;
+    // otherwise "/" stays the plain health check (API-only mode).
+    let app = match web_config {
+        Some(web) => web::mount(app, web),
+        None => app.route("/", get(health)),
+    };
+
+    let app = app
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .make_span_with(|request: &axum::extract::Request| {
+                    // Log the URI with secrets redacted: WebSocket clients pass the
+                    // JWT as ?token=..., which must never end up in log files.
+                    tracing::info_span!(
+                        "request",
+                        method = %request.method(),
+                        uri = %redact_uri(request.uri()),
+                        version = ?request.version(),
+                    )
+                })
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
         .layer(JwtAuthLayer::new(jwt_secret, user_manager))
@@ -321,9 +342,53 @@ async fn shutdown_signal() {
     }
 }
 
+/// Query parameters whose values are replaced with `REDACTED` in request logs.
+const SENSITIVE_QUERY_KEYS: &[&str] = &["token", "access_token", "password"];
+
+/// Returns the request path and query with sensitive query values redacted.
+fn redact_uri(uri: &axum::http::Uri) -> String {
+    let Some(query) = uri.query() else {
+        return uri.path().to_string();
+    };
+    let redacted: Vec<String> = query
+        .split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((key, _)) if SENSITIVE_QUERY_KEYS.contains(&key) => format!("{key}=REDACTED"),
+            _ => pair.to_string(),
+        })
+        .collect();
+    format!("{}?{}", uri.path(), redacted.join("&"))
+}
+
+/// CORS policy. By default any origin is mirrored (with credentials), which keeps
+/// cross-origin setups such as the Vite dev server talking to the worker directly
+/// working. Set `CORS_ALLOWED_ORIGINS` to a comma-separated list (for example
+/// `http://localhost:3000,https://panel.example.com`) to only allow those origins.
+/// When the worker serves the web console itself, requests are same-origin and
+/// need no CORS at all.
 fn cors_layer() -> CorsLayer {
+    let allow_origin = match env::var("CORS_ALLOWED_ORIGINS") {
+        Ok(list) if !list.trim().is_empty() => {
+            let origins: Vec<axum::http::HeaderValue> = list
+                .split(',')
+                .map(|o| o.trim().trim_end_matches('/'))
+                .filter(|o| !o.is_empty())
+                .filter_map(|o| match o.parse() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        tracing::warn!("Ignoring invalid origin in CORS_ALLOWED_ORIGINS: {o}");
+                        None
+                    }
+                })
+                .collect();
+            info!("CORS restricted to {} origin(s)", origins.len());
+            AllowOrigin::list(origins)
+        }
+        _ => AllowOrigin::mirror_request(),
+    };
+
     CorsLayer::new()
-        .allow_origin(AllowOrigin::mirror_request())
+        .allow_origin(allow_origin)
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -334,4 +399,21 @@ fn cors_layer() -> CorsLayer {
         ])
         .allow_headers(AllowHeaders::mirror_request())
         .allow_credentials(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_uri;
+
+    #[test]
+    fn redacts_tokens_in_logged_uris() {
+        let uri = "/api/instances/abc/ws?token=eyJhbGciOi.secret.sig&tail=100".parse().unwrap();
+        assert_eq!(redact_uri(&uri), "/api/instances/abc/ws?token=REDACTED&tail=100");
+
+        let uri = "/api/instances/abc/files?path=/world".parse().unwrap();
+        assert_eq!(redact_uri(&uri), "/api/instances/abc/files?path=/world");
+
+        let uri = "/api/health".parse().unwrap();
+        assert_eq!(redact_uri(&uri), "/api/health");
+    }
 }

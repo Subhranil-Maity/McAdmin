@@ -3,7 +3,6 @@ import {
   Search,
   Shield,
   Crown,
-  User as UserIcon,
   Loader2,
   Trash2,
   Key,

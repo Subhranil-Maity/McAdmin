@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -e
 
-# Default to production mode
+# Production (default): build the web console, then run the worker alone; it
+#   serves the console and the API on one port (ADMIN_WORKER_PORT, default 8000).
+# Debug (-d): worker via `cargo run` + Vite dev server with hot reload on :3000.
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEBUG_MODE=false
 
-# Parse flags
 while getopts "d" opt; do
   case "$opt" in
     d)
@@ -12,7 +15,8 @@ while getopts "d" opt; do
       ;;
     *)
       echo "Usage: $0 [-d]"
-      echo "  -d    Run in debug mode (cargo run / bun run dev)"
+      echo "  (none)  Production: build the console, worker serves it on one port"
+      echo "  -d      Debug: cargo run + bun run dev (hot reload on :3000)"
       exit 1
       ;;
   esac
@@ -20,16 +24,18 @@ done
 
 PIDS=()
 
-# Cleanup function to kill all spawned child processes
+# Stop every service with SIGTERM and wait, so the worker can stop its
+# Minecraft servers gracefully (saving worlds) before exiting.
 cleanup() {
+    trap - SIGINT SIGTERM EXIT
     echo ""
     echo "[!] Stopping all running services..."
     for pid in "${PIDS[@]}"; do
         if kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null || true
+            kill -TERM "$pid" 2>/dev/null || true
         fi
     done
-    wait 2>/dev/null
+    wait 2>/dev/null || true
     echo "[✓] All services stopped."
     exit 0
 }
@@ -41,12 +47,14 @@ if [ "$DEBUG_MODE" = true ]; then
     echo "       STARTING IN DEBUG MODE (-d)        "
     echo "=========================================="
 
+    # `exec` makes each PID the real process (cargo run replaces itself with the
+    # worker on Unix), so cleanup's SIGTERM reaches it directly.
     echo "[+] Starting McAdminWorker (cargo run)..."
-    (cd ./McAdminWorker && cargo run) &
+    (cd "$ROOT/McAdminWorker" && exec cargo run) &
     PIDS+=($!)
 
-    echo "[+] Starting McAdminConsole (bun run dev)..."
-    (cd ./McAdminConsole && bun run dev) &
+    echo "[+] Starting McAdminConsole (bun run dev, http://localhost:3000)..."
+    (cd "$ROOT/McAdminConsole" && exec bun run dev) &
     PIDS+=($!)
 
 else
@@ -54,25 +62,28 @@ else
     echo "       STARTING IN PRODUCTION MODE        "
     echo "=========================================="
 
-    echo "[+] Starting McAdminWorker (cargo run --release)..."
-    (cd ./McAdminWorker && cargo run --release) &
-    PIDS+=($!)
+    echo "[+] Building McAdminConsole (bun install + bun run build)..."
+    (cd "$ROOT/McAdminConsole" && bun install --frozen-lockfile && bun run build)
 
-    echo "[+] Building McAdminConsole (bun run build)..."
-    (cd ./McAdminConsole && bun run build)
+    echo "[+] Building McAdminWorker (cargo build --release)..."
+    (cd "$ROOT/McAdminWorker" && cargo build --release)
 
-    echo "[+] Starting McAdminConsole (bun run start)..."
-    (cd ./McAdminConsole && bun run start) &
+    # The worker serves the built console from WEB_ROOT; an explicit WEB_ROOT in
+    # the environment wins (dotenvy never overrides existing variables).
+    export WEB_ROOT="${WEB_ROOT:-$ROOT/McAdminConsole/dist}"
+
+    echo "[+] Starting McAdminWorker (API + web console from $WEB_ROOT)..."
+    (cd "$ROOT/McAdminWorker" && exec ./target/release/mc_admin_worker) &
     PIDS+=($!)
 fi
 
-# echo "[+] Starting Caddy Reverse Proxy..."
-# sudo caddy run --config ./Caddyfile &
-# PIDS+=($!)
+# For HTTPS, put a reverse proxy in front of the worker, e.g. a Caddyfile with:
+#   panel.example.com {
+#       reverse_proxy 127.0.0.1:8000
+#   }
 
 echo ""
 echo "[✓] All services are up!"
 echo "Press Ctrl+C to stop all."
 
-# Wait for background processes
 wait

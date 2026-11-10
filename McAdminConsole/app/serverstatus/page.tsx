@@ -10,7 +10,6 @@ import {
   LogOut,
   ArrowLeft,
   Loader2,
-  ShieldCheck,
   AlertTriangle
 } from "lucide-react";
 import { getServerStatus, ServerStatus } from "@/lib/mc-server";
@@ -94,7 +93,6 @@ export default function ServerStatusPage() {
   // Determine status indicators
   const isMcServerOnline = isPhysicalServerOnline && status?.status === "ONLINE";
   const isMcServerStarting = isPhysicalServerOnline && status?.status === "STARTING";
-  const isMcServerOffline = !isPhysicalServerOnline || status?.status === "OFFLINE";
 
   return (
     <div className="flex-1 min-h-screen bg-zinc-950 text-zinc-50 flex flex-col justify-center items-center py-12 px-4 relative overflow-hidden">

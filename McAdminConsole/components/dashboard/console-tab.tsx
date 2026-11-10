@@ -1,5 +1,5 @@
 import React from "react";
-import { Terminal, Loader2, Lock, ShieldAlert } from "lucide-react";
+import { Terminal, Loader2, Lock } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,6 @@ export default function ConsoleTab({
   consoleEndRef,
   lastCommandResponse,
   isConsoleLogsLoading,
-  isWsConnected,
   canViewLogs: propCanViewLogs,
   canSendCommand: propCanSendCommand,
 }: ConsoleTabProps) {

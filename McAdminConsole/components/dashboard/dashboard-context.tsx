@@ -19,6 +19,7 @@ import {
   getMetricsHistory,
   getBackendBaseUrl,
   getBackendWsUrl,
+  notifyBackendUnreachable,
   getJob,
   listInstanceJobs,
   parseLogLine,
@@ -473,6 +474,8 @@ export function DashboardProvider({
           if (!isMounted) return;
           setIsWsConnected(false);
           wsRef.current = null;
+          // A dropped live connection is often the first sign the worker is down.
+          notifyBackendUnreachable();
 
           // Reconnect with exponential backoff: 1s, 2s, 4s, up to 10s
           const delayMs = Math.min(1000 * Math.pow(2, reconnectAttemptRef.current), 10000);

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { ServerOff, RefreshCw, AlertTriangle, Activity, Wifi } from "lucide-react";
+import { ServerOff, RefreshCw, Activity, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getBackendBaseUrl } from "@/lib/mc-server/utils";
 import { useAuth } from "@/lib/auth/auth-context";

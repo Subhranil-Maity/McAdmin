@@ -17,8 +17,10 @@ use crate::role_manager::{InstanceRole, Permission, RoleManager, ServerPermissio
 use crate::user_manager::{UserManager, UserPermissions, UserSummary};
 
 pub const DEFAULT_JWT_SECRET: &str = "mcadmin_jwt_default_secret_change_in_production";
+/// Public API paths. Everything outside `/api/` (the web console's static
+/// files, `/config.js`, and the `GET /` health check) is public as well.
 const PUBLIC_PATHS: &[&str] = &[
-    "/",
+    "/api/health",
     "/api/status",
     "/api/auth/health",
     "/api/auth/login",
@@ -249,7 +251,7 @@ where
             }
 
             let path = request.uri().path();
-            if PUBLIC_PATHS.contains(&path) {
+            if !path.starts_with("/api/") || PUBLIC_PATHS.contains(&path) {
                 return inner.call(request).await;
             }
 

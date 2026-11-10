@@ -112,6 +112,19 @@ export function clearAuthToken(): void {
 }
 
 /**
+ * Window event fired when a request to the worker may have failed because the
+ * worker is unreachable. The AuthProvider reacts with an immediate health check
+ * and shows the "backend unavailable" screen if the worker is really down.
+ */
+export const BACKEND_UNREACHABLE_EVENT = "mcadmin:backend_unreachable";
+
+export function notifyBackendUnreachable(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(BACKEND_UNREACHABLE_EVENT));
+  }
+}
+
+/**
  * Standard fetch wrapper that automatically injects Bearer token.
  */
 export async function apiFetch(input: string | URL, init?: RequestInit): Promise<Response> {
@@ -122,11 +135,28 @@ export async function apiFetch(input: string | URL, init?: RequestInit): Promise
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const res = await fetch(input, {
-    ...init,
-    headers,
-    credentials: "include",
-  });
+  let res: Response;
+  try {
+    res = await fetch(input, {
+      ...init,
+      headers,
+      credentials: "include",
+    });
+  } catch (err) {
+    // Network-level failure (worker down, connection refused, DNS, CORS...).
+    // Aborts are deliberate and say nothing about the worker.
+    if (!(err instanceof DOMException && err.name === "AbortError")) {
+      notifyBackendUnreachable();
+    }
+    throw err;
+  }
+
+  // A proxy in front of the worker (Vite dev server, Caddy, nginx) answers
+  // 502/503/504 when the worker is down. The worker itself also uses 502 for
+  // upstream errors (Modrinth, RCON), so this only triggers a health check.
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    notifyBackendUnreachable();
+  }
 
   if (res.status === 401 && token) {
     clearAuthToken();
